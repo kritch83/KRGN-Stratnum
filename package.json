@@ -1,0 +1,14 @@
+{
+  "name": "stratnum",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Solo stratum mining server + dashboard for Kerrigan (KRGN) equihash 192/7 and 200/9",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/run-tests.js"
+  }
+}

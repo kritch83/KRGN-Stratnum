@@ -1,0 +1,67 @@
+{
+  "node": {
+    "host": "127.0.0.1",
+    "port": 7121,
+    "user": "rpcuser",
+    "pass": "rpcpassword",
+    "pollMs": 1000,
+    "zmqBlock": "",
+    "confPath": ""
+  },
+  "pool": {
+    "address": "PUT-YOUR-KRGN-PAYOUT-ADDRESS-HERE",
+    "port": 3192,
+    "bind": "0.0.0.0",
+    "coinbaseTag": "",
+    "startDiff": 8,
+    "minDiff": 0.5,
+    "maxDiff": 100000,
+    "vardiff": {
+      "targetTime": 15,
+      "retargetTime": 90,
+      "variancePercent": 30
+    },
+    "nTimeToleranceSec": 7200,
+    "maxConnections": 100,
+    "jobRefreshSec": 30,
+    "retainJobs": 5,
+    "equihash200": {
+      "enabled": false,
+      "port": 3200,
+      "startDiff": 1,
+      "minDiff": 0.05,
+      "maxDiff": 100000
+    }
+  },
+  "dashboard": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8080,
+    "historySamples": 180,
+    "theme": "default"
+  },
+  "data": {
+    "dir": "./data"
+  },
+  "log": {
+    "level": "info"
+  },
+  "notify": {
+    "enabled": false,
+    "userKey": "",
+    "apiToken": "",
+    "device": "",
+    "sound": "",
+    "priority": 0,
+    "workerOfflineSec": 30,
+    "nodeDownSec": 30,
+    "events": {
+      "blockFound": true,
+      "blockRejected": true,
+      "workerOffline": true,
+      "workerOnline": true,
+      "nodeDown": true,
+      "statePersistFailed": true
+    }
+  }
+}

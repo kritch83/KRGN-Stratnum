@@ -1,0 +1,1122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>stratnum — KRGN solo pool</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --baseline: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --series: #2a78d6;
+  --series-fill: rgba(42,120,214,0.10);
+  --series-2: #eb6834;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  /* the combined block count's glow */
+  --tally-1: #a8740f;
+  --tally-2: #e3a82b;
+  --tally-glow: rgba(227, 168, 43, 0.55);
+  --tally-sheen: rgba(227, 168, 43, 0.10);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --series: #3987e5;
+    --series-fill: rgba(57,135,229,0.14);
+    --series-2: #d95926;
+    --tally-1: #e8b43c;
+    --tally-2: #fff1c2;
+    --tally-glow: rgba(255, 200, 80, 0.6);
+    --tally-sheen: rgba(255, 210, 110, 0.07);
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 1060px; margin: 0 auto; padding: 20px 16px 40px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+h1 .sub { font-size: 13px; font-weight: 400; color: var(--ink-2); margin-left: 8px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
+  padding: 5px 12px; font-size: 13px; color: var(--ink-2); max-width: 60ch;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dot.good { background: var(--good); }
+.dot.warning { background: var(--warning); }
+.dot.critical { background: var(--critical); }
+.dot.serious { background: var(--serious); }
+.dot.muted { background: var(--muted); }
+
+/* 10 tiles: minmax is tuned to land 5 per row at full width, so they read as
+   two even rows rather than one cramped line with an orphan under it. */
+/* 230px lands four per row at full width and steps down to 3/2/1 as the
+   window narrows — the status tiles carry a sentence in the subtitle, which
+   needs more room than the plain number tiles did. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin-bottom: 12px; }
+/* Only ever rendered for a condition that is silently costing the operator
+   records. It is meant to be impossible to miss, not tasteful. */
+.alarm { border: 1px solid var(--critical); border-left-width: 4px; border-radius: 8px;
+  padding: 11px 14px; margin-bottom: 12px; color: var(--critical); font-size: 13.5px; line-height: 1.45; }
+.alarm b { display: block; font-size: 15px; margin-bottom: 2px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.tile .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 4px; }
+.tile .value { font-size: 26px; line-height: 1.15; font-weight: 600; }
+.tile .sub { font-size: 12px; color: var(--ink-2); margin-top: 2px; min-height: 1em; }
+.tile .value .vsuf { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 5px; }
+/* status tiles: a dot sized to sit on the same optical line as a 26px value */
+.tile .value .sdot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; margin-right: 8px; vertical-align: 0.08em; flex: none; }
+/* Per-check pips under the health verdict. Wraps rather than overflowing, so a
+   narrow window costs a second line instead of a clipped check. */
+.pips { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 5px; }
+.pips .pip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--ink-2); white-space: nowrap; }
+.pips .pip .dot { width: 7px; height: 7px; }
+
+/* Algo switcher: only rendered when the pool serves more than one algo. The
+   [hidden] rule must be explicit — display:flex would otherwise beat it. */
+.algos { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 14px; }
+.algos[hidden] { display: none; }
+.algo-tab {
+  font: inherit; font-size: 13px; color: var(--ink-2); cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 12px; display: inline-flex; align-items: baseline; gap: 8px;
+}
+.algo-tab b { color: var(--ink); font-weight: 600; }
+.algo-tab .meta { color: var(--muted); font-size: 12px; }
+.algo-tab[aria-pressed="true"] { border-color: var(--series); box-shadow: inset 0 0 0 1px var(--series); }
+
+/* Combined block count under the title. The animation is decoration only: the
+   number is plain text and reads the same with every effect switched off. */
+.tally {
+  position: relative; overflow: hidden;
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 16px; margin: -4px 0 14px;
+}
+.tally[hidden] { display: none; }
+/* a slow sheen crossing the bar, behind the text */
+.tally::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(100deg, transparent 35%, var(--tally-sheen) 50%, transparent 65%);
+  background-size: 250% 100%;
+  animation: tally-sheen 8s linear infinite;
+}
+.tally-num {
+  position: relative; display: inline-block; transform-origin: left center;
+  font-size: 30px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums;
+  background: linear-gradient(90deg, var(--tally-1), var(--tally-2), var(--tally-1));
+  background-size: 200% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: tally-shimmer 4s linear infinite, tally-glow 3s ease-in-out infinite;
+}
+.tally-label { position: relative; font-size: 14px; font-weight: 600; color: var(--ink); }
+.tally-split { position: relative; font-size: 12px; color: var(--muted); margin-left: auto; }
+/* one celebratory pop when the count has gone up since this browser last looked */
+.tally-num.pop { animation: tally-shimmer 4s linear infinite, tally-pop 1.6s ease-out; }
+@keyframes tally-shimmer { to { background-position: -200% 0; } }
+@keyframes tally-glow {
+  0%, 100% { filter: drop-shadow(0 0 2px var(--tally-glow)); }
+  50% { filter: drop-shadow(0 0 9px var(--tally-glow)); }
+}
+@keyframes tally-sheen { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+@keyframes tally-pop {
+  0% { transform: scale(1); filter: drop-shadow(0 0 2px var(--tally-glow)); }
+  20% { transform: scale(1.35); filter: drop-shadow(0 0 18px var(--tally-glow)); }
+  100% { transform: scale(1); filter: drop-shadow(0 0 2px var(--tally-glow)); }
+}
+@supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+  .tally-num { background: none; color: var(--tally-1); }
+}
+
+/* ---- themes: dashboard.theme in config.json puts data-theme on <html> ----
+   Each block overrides every palette token and outranks the system dark-mode
+   block above, so a theme looks the same whatever the OS is set to. */
+:root[data-theme="80s-neon"] {
+  color-scheme: dark;
+  --page: #120724; --page-2: #2b0a4d;
+  --surface: rgba(29, 11, 54, 0.86);
+  --ink: #f6e8ff; --ink-2: #d4b8ff; --muted: #9a7fc4; --label: #00e5ff;
+  --grid: #2e1650; --baseline: #4a2378; --border: rgba(255, 43, 214, 0.32);
+  --series: #00e5ff; --series-fill: rgba(0, 229, 255, 0.12); --series-2: #ff2bd6;
+  --good: #39ff88; --warning: #ffd23f; --serious: #ff8a3d; --critical: #ff3b5c;
+  --tally-1: #ff2bd6; --tally-2: #00e5ff;
+  --tally-glow: rgba(255, 43, 214, 0.8); --tally-sheen: rgba(0, 229, 255, 0.10);
+  --neon: #ff2bd6; --neon-2: #00e5ff; --value-glow: rgba(0, 229, 255, 0.35);
+  --art-grid: rgba(255, 43, 214, 0.55); --art-sun-1: #ffd23f; --art-sun-2: #ff2bd6; --art-sun-opacity: 0.55;
+}
+:root[data-theme="80s-sunset"] {
+  color-scheme: dark;
+  --page: #0d0221; --page-2: #3a0b3f;
+  --surface: rgba(26, 9, 51, 0.86);
+  --ink: #fff3e6; --ink-2: #ffc9a3; --muted: #b38b91; --label: #2de2e6;
+  --grid: #2a1446; --baseline: #4b2352; --border: rgba(255, 108, 17, 0.34);
+  --series: #f9c80e; --series-fill: rgba(249, 200, 14, 0.12); --series-2: #ff3864;
+  --good: #3ce38a; --warning: #f9c80e; --serious: #ff6c11; --critical: #ff3864;
+  --tally-1: #ff6c11; --tally-2: #f9c80e;
+  --tally-glow: rgba(255, 108, 17, 0.8); --tally-sheen: rgba(249, 200, 14, 0.10);
+  --neon: #ff3864; --neon-2: #2de2e6; --value-glow: rgba(249, 200, 14, 0.3);
+  --art-grid: rgba(45, 226, 230, 0.5); --art-sun-1: #f9c80e; --art-sun-2: #ff3864; --art-sun-opacity: 0.6;
+}
+:root[data-theme="80s-miami"] {
+  color-scheme: light;
+  --page: #fff6ee; --page-2: #ffe1ee;
+  --surface: rgba(255, 255, 255, 0.86);
+  --ink: #2a1740; --ink-2: #5d3f7a; --muted: #7e6286; --label: #7a4fd6;
+  --grid: #f3dbe7; --baseline: #e8bcd3; --border: rgba(255, 95, 162, 0.38);
+  --series: #13b5b1; --series-fill: rgba(19, 181, 177, 0.14); --series-2: #ff5fa2;
+  --good: #10a37f; --warning: #e39a00; --serious: #f0703c; --critical: #e0245e;
+  --tally-1: #e0457f; --tally-2: #0f9c98;
+  --tally-glow: rgba(255, 95, 162, 0.45); --tally-sheen: rgba(19, 181, 177, 0.12);
+  --neon: #ff5fa2; --neon-2: #13b5b1; --value-glow: transparent;
+  --art-grid: rgba(122, 79, 214, 0.35); --art-sun-1: #ffb86b; --art-sun-2: #ff5fa2; --art-sun-opacity: 0.5;
+}
+
+/* ---- what the 80s themes share: neon type, glowing edges, and a backdrop ---- */
+html[data-theme^="80s"] { overflow-x: hidden; }
+[data-theme^="80s"] body {
+  min-height: 100vh;
+  background: linear-gradient(to bottom, var(--page) 35%, var(--page-2) 62%) fixed;
+}
+[data-theme^="80s"] h1 {
+  text-transform: uppercase; letter-spacing: 0.14em;
+  text-shadow: 0 0 6px var(--neon), 0 0 18px var(--neon);
+}
+[data-theme="80s-miami"] h1 { text-shadow: 2px 2px 0 var(--neon), 4px 4px 0 var(--neon-2); }
+[data-theme^="80s"] h1 .sub { text-transform: none; letter-spacing: 0; text-shadow: none; }
+[data-theme^="80s"] .tile,
+[data-theme^="80s"] .card,
+[data-theme^="80s"] .tally,
+[data-theme^="80s"] .pill,
+[data-theme^="80s"] .algo-tab {
+  box-shadow: 0 0 14px -5px var(--neon);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+}
+[data-theme^="80s"] .tile .label,
+[data-theme^="80s"] .tally-label { color: var(--label); letter-spacing: 0.14em; text-transform: uppercase; }
+[data-theme^="80s"] .tile .value { text-shadow: 0 0 10px var(--value-glow); }
+[data-theme^="80s"] .algo-tab[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--series), 0 0 16px -4px var(--series); }
+
+/* The backdrop: a striped sun sitting on the horizon, and a neon grid floor
+   rolling toward the viewer in front of it. Fixed, dim, behind everything,
+   and never in the way of a click. */
+[data-theme^="80s"] body::before,
+[data-theme^="80s"] body::after {
+  content: ''; position: fixed; z-index: -1; pointer-events: none;
+}
+[data-theme^="80s"] body::before {
+  left: 50%; top: 62vh; width: min(52vw, 460px); aspect-ratio: 1;
+  transform: translate(-50%, -50%); border-radius: 50%;
+  opacity: var(--art-sun-opacity);
+  background: linear-gradient(to bottom, var(--art-sun-1) 15%, var(--art-sun-2) 85%);
+  /* the classic horizontal cuts, thickening toward the horizon */
+  -webkit-mask: linear-gradient(to bottom, #000 30%, transparent 30% 32%, #000 32% 40%, transparent 40% 43%,
+    #000 43% 50%, transparent 50% 54%, #000 54%);
+  mask: linear-gradient(to bottom, #000 30%, transparent 30% 32%, #000 32% 40%, transparent 40% 43%,
+    #000 43% 50%, transparent 50% 54%, #000 54%);
+}
+[data-theme^="80s"] body::after {
+  left: -50%; right: -50%; top: 62vh; height: 45vh;
+  background:
+    repeating-linear-gradient(to right, var(--art-grid) 0 2px, transparent 2px 70px),
+    repeating-linear-gradient(to bottom, var(--art-grid) 0 2px, transparent 2px 44px),
+    linear-gradient(to bottom, var(--page-2), var(--page));
+  transform-origin: 50% 0;
+  transform: perspective(60vh) rotateX(60deg);
+  /* fade out toward the horizon, so the sun sinks into haze rather than a line */
+  -webkit-mask: linear-gradient(to bottom, transparent, #000 25%);
+  mask: linear-gradient(to bottom, transparent, #000 25%);
+  animation: grid-roll 1.4s linear infinite;
+}
+@keyframes grid-roll { to { background-position: 0 0, 0 44px, 0 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .tally::before, .tally-num, .tally-num.pop, [data-theme^="80s"] body::after { animation: none; }
+}
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+.card h2 { font-size: 14px; margin: 0 0 10px; }
+.card h2 .unit { font-weight: 400; color: var(--muted); font-size: 12px; margin-left: 6px; }
+
+/* scoped to chart cards: .card h2 is shared by Workers, Blocks and Rejects */
+.chart-card h2 { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.chart-card h2 .unit { margin-left: 0; }
+.chart-card h2 .legend { margin-left: auto; font-weight: 400; font-size: 12px; color: var(--ink-2); display: inline-flex; gap: 12px; align-items: center; }
+.chart-card h2 .key { display: inline-flex; align-items: center; gap: 5px; }
+.swatch { display: inline-block; width: 10px; height: 2px; border-radius: 1px; flex: none; }
+.swatch.s1 { background: var(--series); }
+.swatch.s2 { background: var(--series-2); }
+
+.spark-wrap { position: relative; }
+.spark { display: block; width: 100%; height: 130px; }
+.spark-tip {
+  position: absolute; display: none; pointer-events: none;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 9px; font-size: 12px; color: var(--ink); white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12); transform: translate(-50%, 0);
+}
+.spark-tip .hd { color: var(--muted); margin-bottom: 3px; }
+.spark-tip .row { display: flex; align-items: center; gap: 6px; }
+.spark-tip .k { color: var(--muted); }
+.spark-tip .d { color: var(--muted); margin-top: 2px; }
+.spark-empty { color: var(--muted); font-size: 13px; padding: 24px 0 30px; text-align: center; }
+
+/* wide tables scroll inside their card rather than pushing the page sideways */
+#workers-holder, #blocks-holder, #rejects-holder { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 500; padding: 4px 10px 6px 0; border-bottom: 1px solid var(--grid); }
+td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--grid); font-size: 13px; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; }
+td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--ink-2); }
+.status { display: inline-flex; align-items: center; gap: 6px; }
+.empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+.hidden { display: none; }
+
+footer { color: var(--muted); font-size: 12px; margin-top: 18px; display: flex; gap: 16px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>stratnum<span class="sub" id="sub">Kerrigan · solo</span></h1>
+    <div class="pill" id="pill"><span class="dot warning" id="pill-dot"></span><span id="pill-text">connecting…</span></div>
+  </header>
+
+  <section class="tally" id="tally" hidden>
+    <span class="tally-num" id="tally-num"></span>
+    <span class="tally-label" id="tally-label">blocks found</span>
+    <span class="tally-split" id="tally-split"></span>
+  </section>
+
+  <nav class="algos" id="algos" hidden></nav>
+
+  <div class="alarm" id="alarm" hidden></div>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section class="card chart-card" id="hashrate-card">
+    <h2>Difficulty &amp; hashrate<span class="unit">separate scales — network difficulty on the left, pool Sol/s on the right</span>
+      <span class="legend">
+        <span class="key"><span class="swatch s2"></span>net difficulty</span>
+        <span class="key"><span class="swatch s1"></span>pool Sol/s</span>
+      </span>
+    </h2>
+    <div class="spark-wrap" id="spark-wrap">
+      <svg class="spark" id="spark" preserveAspectRatio="none"></svg>
+      <div class="spark-tip" id="spark-tip"></div>
+      <div class="spark-empty hidden" id="spark-empty">collecting samples…</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Workers</h2>
+    <div id="workers-holder"></div>
+  </section>
+
+  <section class="card">
+    <h2>Blocks found</h2>
+    <div id="blocks-holder"></div>
+  </section>
+
+  <section class="card hidden" id="rejects-card">
+    <h2>Share rejects<span class="unit">all "invalid solution" → check the miner's --pers flag</span></h2>
+    <div id="rejects-holder"></div>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<script>
+'use strict';
+// All dynamic content is rendered with textContent — never innerHTML.
+const $ = id => document.getElementById(id);
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined && text !== null) e.textContent = text;
+  return e;
+}
+
+function fmtNum(v, places) {
+  if (v === null || v === undefined || !isFinite(v)) return '—';
+  return v.toLocaleString('en-US', { maximumFractionDigits: places === undefined ? 2 : places });
+}
+function fmtSols(v) {
+  if (v === null || v === undefined) return '—';
+  if (v >= 10000) return fmtNum(v / 1000, 1) + 'k';
+  return fmtNum(v, v >= 100 ? 0 : 2);
+}
+function fmtDur(sec) {
+  if (sec === null || sec === undefined || !isFinite(sec)) return '—';
+  if (sec < 90) return Math.round(sec) + 's';
+  if (sec < 5400) return Math.round(sec / 60) + 'm';
+  if (sec < 172800) return (sec / 3600).toFixed(1) + 'h';
+  return (sec / 86400).toFixed(1) + 'd';
+}
+function fmtAgo(sec) { return sec === null || sec === undefined ? '—' : fmtDur(sec) + ' ago'; }
+
+// ---- the refresh pill ----
+// It counts seconds since the last successful poll — always in seconds, never
+// "just now", which changes width as it flips back and forth. The case that
+// matters is the one where the page has quietly stopped updating and every
+// number on screen is a lie.
+const POLL_MS = 2000;
+let lastUpdateAt = null;   // ms of the last good /api/stats
+let lastUptimeSec = null;  // server uptime as of that poll
+let pollError = null;      // message from the most recent failed poll
+
+function paintPill() {
+  const dot = $('pill-dot');
+  const text = $('pill-text');
+  if (lastUpdateAt === null) {
+    dot.className = 'dot ' + (pollError ? 'critical' : 'warning');
+    text.textContent = pollError ? 'cannot reach the pool (' + pollError + ')' : 'connecting…';
+    return;
+  }
+  const ageSec = Math.max(0, Math.round((Date.now() - lastUpdateAt) / 1000));
+  if (pollError) {
+    dot.className = 'dot critical';
+    text.textContent = 'disconnected (' + pollError + ') · last update ' + fmtAgo(ageSec);
+    return;
+  }
+  // One missed poll is normal jitter; several in a row is not.
+  dot.className = 'dot ' + (ageSec > 15 ? 'critical' : ageSec > 6 ? 'warning' : 'good');
+  // Uptime carries the age too, so it keeps climbing between polls instead of
+  // freezing at whatever the last snapshot happened to say.
+  text.textContent = 'updated ' + fmtAgo(ageSec) +
+    ' · uptime ' + fmtDur(lastUptimeSec + ageSec);
+}
+function fmtTime(ms) {
+  const d = new Date(ms);
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function fmtKRGN(v) { return v === null || v === undefined ? '—' : fmtNum(v, 4) + ' KRGN'; }
+// Effort is actual work / expected work. 100% = exactly the odds, and LOWER
+// is better. Null until the first block found after effort tracking was added.
+function fmtEffort(pct) { return pct === null || pct === undefined ? '—' : fmtNum(pct, 0) + '%'; }
+
+// Both effort tiles are the SAME quantity — actual work ÷ what a block should
+// cost — so they read in the same direction and LOWER is better on each:
+//   avg effort — across finished blocks. 100% is exactly the odds; 50% means
+//             blocks are costing half what they should.
+//   this block — the round in progress. It only counts UP from 0, so a small
+//             number is "not yet overdue" rather than good news yet.
+// Reporting effort rather than luck is deliberate: effort averages with a
+// plain mean (every block costs exactly one expected block, so the
+// denominators are all 1), and it stays meaningful mid-round, where luck would
+// read as several thousand percent one share in.
+// Kept to one short word: the value line must not wrap, or the whole tile row
+// grows to match. The sample size goes in the subtitle, which may wrap freely.
+function effortSub(s) {
+  const n = s.pool.effortBlocks;
+  if (!n) return 'no blocks measured yet';
+  return 'over ' + n + (n === 1 ? ' block' : ' blocks');
+}
+
+// `suffix` rides alongside the big number in smaller muted type — for when a
+// value needs a word to be unambiguous ("105% avg") without stealing the
+// subtitle line.
+function tile(label, value, sub, suffix) {
+  const t = el('div', 'tile');
+  t.appendChild(el('div', 'label', label));
+  const v = el('div', 'value', value);
+  if (suffix) v.appendChild(el('span', 'vsuf', suffix));
+  t.appendChild(v);
+  t.appendChild(el('div', 'sub', sub || ''));
+  return t;
+}
+
+// A tile whose headline is a state rather than a number: coloured dot plus a
+// one-word verdict, so "is anything wrong?" is answerable at a glance instead
+// of by reading a sentence.
+function statusTile(label, tone, text, sub) {
+  const t = el('div', 'tile');
+  t.appendChild(el('div', 'label', label));
+  const v = el('div', 'value');
+  v.appendChild(el('span', 'sdot dot ' + tone));
+  v.appendChild(el('span', null, text));
+  t.appendChild(v);
+  t.appendChild(el('div', 'sub', sub || ''));
+  return t;
+}
+
+// Node reachability — can we talk to it at all. The peer count moved to its
+// own tile, and "is it fit to mine" is the Health tile's job; this one stays
+// deliberately binary.
+function nodeTile(s) {
+  if (!s.node.up) return statusTile('Node', 'critical', 'Offline', s.node.statusText);
+  // Height lives on the Next block height tile (as height+1), so the space is
+  // better spent on the addresses — the LAN one is what rigs point at, and the
+  // public one is what the node tells the network to reach it on.
+  const ips = [s.node.localIp, s.node.publicIp].filter(Boolean);
+  const sub = ips.length ? ips.join(' · ') : 'height ' + fmtNum(s.node.height, 0);
+  return statusTile('Node', 'good', 'Online', sub);
+}
+
+// Peers. Zero is not a slow node, it is a stopped one: getblocktemplate fails
+// outright with RPC_CLIENT_NOT_CONNECTED, so the number is coloured rather
+// than left as neutral trivia.
+function peersTile(s) {
+  const n = s.node.connections;
+  if (n === null || n === undefined) return tile('Peers', '—', 'peer count unavailable');
+  const inn = s.node.connectionsIn;
+  const out = s.node.connectionsOut;
+  let sub;
+  if (n === 0) sub = 'no connections — not mining';
+  else if (inn === null || inn === undefined || out === null || out === undefined) sub = 'connected to the network';
+  else sub = fmtNum(inn, 0) + ' in · ' + fmtNum(out, 0) + ' out';
+  return tile('Peers', fmtNum(n, 0), sub);
+}
+
+// One verdict for "is this node able to mine right now". Red is reserved for
+// states that stop templates outright, so red always means work has halted;
+// sync lag is amber, because blocks still flow while it catches up.
+function healthTile(s) {
+  const h = s.node.health || {};
+  const tone = h.level === 'critical' ? 'critical' : h.level === 'warn' ? 'warning' : 'good';
+  const text = h.level === 'critical' ? 'Problem' : h.level === 'warn' ? 'Degraded' : 'Healthy';
+  // The reason line is only worth the space when something IS wrong. When
+  // every pip is green, "all clear" restates what the pips already say.
+  const t = statusTile('Node health', tone, text, h.level === 'good' ? '' : (h.reason || ''));
+  // One pip per check, so "Degraded" says WHICH thing degraded without having
+  // to read the sentence. Inserted above the reason line. Grey = the RPC that
+  // answers that question did not reply, which is not the same as a failure.
+  const checks = s.node.healthChecks;
+  if (Array.isArray(checks) && checks.length) {
+    const row = el('div', 'pips');
+    for (const c of checks) {
+      const cls = c.status === 'fail' ? 'critical' : c.status === 'warn' ? 'warning'
+        : c.status === 'pass' ? 'good' : 'muted';
+      const pip = el('span', 'pip');
+      pip.appendChild(el('span', 'dot ' + cls));
+      pip.appendChild(el('span', null, c.label));
+      pip.title = c.label + ': ' + c.detail;   // textContent, never innerHTML
+      row.appendChild(pip);
+    }
+    t.insertBefore(row, t.lastChild);
+  }
+  return t;
+}
+
+// ZMQ block notifications. Off is a deliberate configuration, not a fault, so
+// it is grey rather than red — but a configured-and-broken subscriber is a
+// real problem and says so.
+function notifyTile(s) {
+  const z = s.node.zmqStatus;
+  if (!z || z === 'off') {
+    return statusTile('Block alerts', 'muted', 'Off', 'polling only — see README');
+  }
+  if (z === 'connected') {
+    const ago = s.node.lastNotifyAgoSec;
+    return statusTile('Block alerts', 'good', 'Live',
+      ago === null || ago === undefined ? 'instant new-block alerts' : 'last alert ' + fmtAgo(ago));
+  }
+  if (z === 'connecting') return statusTile('Block alerts', 'warning', 'Connecting', 'retrying…');
+  return statusTile('Block alerts', 'critical', 'Down', z);
+}
+
+// How deep into the current round we are. Counts up from 0; past 100% simply
+// means this block is taking longer than average, which is routine.
+function effortTile(s) {
+  const e = s.pool.roundEffortPct;
+  const started = s.pool.roundStartedAt;
+  const parts = ['of a block’s work'];
+  if (started) parts.push(fmtDur((s.now - started) / 1000) + ' in');
+  return tile('This block', e === null || e === undefined ? '—' : fmtNum(e, 0) + '%',
+    parts.join(' · '));
+}
+
+function statusCell(status, confirmations, submitResult) {
+  const wrap = el('span', 'status');
+  let dotCls = 'warning';
+  let text = status;
+  if (status === 'pending') { dotCls = 'warning'; text = 'pending'; }
+  else if (status === 'confirmed') {
+    dotCls = 'good';
+    text = confirmations >= 100 ? 'confirmed' : 'confirming ' + confirmations + '/100';
+  } else if (status === 'orphaned') { dotCls = 'serious'; text = 'orphaned'; }
+  else if (status === 'rejected') { dotCls = 'critical'; text = 'rejected' + (submitResult ? ': ' + submitResult : ''); }
+  wrap.appendChild(el('span', 'dot ' + dotCls));
+  wrap.appendChild(el('span', null, text));
+  return wrap;
+}
+
+function renderTable(holder, headers, rows, emptyText) {
+  holder.replaceChildren();
+  if (!rows.length) {
+    holder.appendChild(el('div', 'empty', emptyText));
+    return;
+  }
+  const table = el('table');
+  const thead = el('thead');
+  const trh = el('tr');
+  for (const h of headers) {
+    const th = el('th', h.num ? 'num' : null, h.label);
+    trh.appendChild(th);
+  }
+  thead.appendChild(trh);
+  table.appendChild(thead);
+  const tbody = el('tbody');
+  for (const row of rows) {
+    const tr = el('tr');
+    for (const cell of row) {
+      const td = el('td', cell.cls || null);
+      if (cell.node) td.appendChild(cell.node);
+      else td.textContent = cell.text === undefined || cell.text === null ? '—' : cell.text;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  holder.appendChild(table);
+}
+
+// ---- charts. One generic renderer drives every card: each chart declares
+// its own elements and one or two series, and each series brings its own
+// scale. Two series on one chart therefore share only the time axis — which
+// is why every scale is spelled out in axis ticks, in its series colour.
+// A null value is always a gap, never a zero. ----
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const SPARK_W = 600;
+// Hover state per chart, keyed by svg id — a single shared array would let
+// one chart's points drive the other's crosshair.
+const chartPoints = new Map();
+
+// Field readers, tolerating samples written before a field existed
+// (undefined) as well as explicit nulls.
+function fieldOf(name) {
+  return p => (Number.isFinite(p[name]) ? p[name] : null);
+}
+const netOf = fieldOf('netDiff');
+const netSolsOf = fieldOf('netSols');
+const solsOf = fieldOf('sols');
+
+function svgEl(tag, attrs) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+// cfg.series entries: { valueOf, color (css var), scale: 'zero'|'minmax',
+// side: 'left'|'right' (draws axis ticks), fill (css var), endLabel,
+// key + swatch (tooltip row), fmt, tickFmt }.
+function renderChart(cfg, history, sampleMs) {
+  const svg = $(cfg.svgId);
+  const empty = $(cfg.emptyId);
+  if (!svg || !empty) return;
+  svg.replaceChildren();
+  chartPoints.set(cfg.svgId, []);
+  if (!history || history.length < 2) {
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  const W = SPARK_W;
+  const H = 130;
+  const padTop = 14;
+  const padBot = 18;
+  const css = getComputedStyle(document.documentElement);
+  // Axis ticks need room; a side with no series keeps the old tight margin.
+  const plotL = cfg.series.some(s => s.side === 'left') ? 48 : 4;
+  const plotR = W - (cfg.series.some(s => s.side === 'right') ? 48 : 4);
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+  const x = i => plotL + (i / (history.length - 1)) * (plotR - plotL);
+
+  // Each series carries its OWN scale. 'zero' is for rates, where zero is
+  // meaningful; 'minmax' is for values like difficulty that never approach
+  // zero and whose variation is the entire signal.
+  const series = cfg.series.map(s => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const p of history) {
+      const v = s.valueOf(p);
+      if (v === null) continue;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    const any = lo !== Infinity;
+    let scale;
+    let tickAt = [];
+    if (!any) {
+      scale = () => H - padBot;
+    } else if (s.scale === 'zero') {
+      const top = Math.max(hi, 0.01) * 1.12;
+      scale = v => H - padBot - (v / top) * (H - padTop - padBot);
+      tickAt = [hi];
+    } else if (hi - lo <= 0) {
+      // A window with no change in it is flat, and still deserves its value.
+      scale = () => padTop + (H - padTop - padBot) * 0.35;
+      tickAt = [lo];
+    } else {
+      scale = v => (H - padBot - 6) - ((v - lo) / (hi - lo)) * (H - padTop - padBot - 12);
+      tickAt = [hi, lo];
+    }
+    return Object.assign({}, s, {
+      resolved: css.getPropertyValue(s.color).trim(), any, scale, tickAt,
+    });
+  });
+
+  // The x-axis is index-based, so a restart would otherwise draw a straight
+  // line across hours of downtime. Break every series on an unusual time step.
+  const gapMs = (sampleMs || 20000) * 2.5;
+  const isBreak = i => i > 0 && (history[i].t - history[i - 1].t) > gapMs;
+
+  svg.appendChild(svgEl('line', {
+    x1: plotL, x2: plotR, y1: H - padBot, y2: H - padBot,
+    stroke: css.getPropertyValue('--baseline').trim(), 'stroke-width': 1,
+  }));
+
+  // Axis ticks, in each series' own colour — this is what makes two scales on
+  // one chart readable as numbers rather than shapes.
+  for (const s of series) {
+    if (!s.side || !s.any) continue;
+    const left = s.side === 'left';
+    for (const val of s.tickAt) {
+      const yy = s.scale(val);
+      svg.appendChild(svgEl('line', {
+        x1: left ? plotL - 3 : plotR, x2: left ? plotL : plotR + 3,
+        y1: yy, y2: yy, stroke: s.resolved, 'stroke-width': 1, opacity: 0.5,
+      }));
+      const tk = svgEl('text', {
+        x: left ? plotL - 6 : plotR + 6, y: yy + 3.5,
+        'text-anchor': left ? 'end' : 'start',
+        fill: s.resolved, 'font-size': 10, opacity: 0.85,
+      });
+      tk.textContent = (s.tickFmt || (v => fmtNum(v, 0)))(val);
+      svg.appendChild(tk);
+    }
+  }
+
+  // Contiguous runs only; a gap is never bridged.
+  function runsFor(s) {
+    const out = [];
+    let cur = [];
+    history.forEach((p, i) => {
+      const v = s.valueOf(p);
+      if (v === null || isBreak(i)) {
+        if (cur.length) out.push(cur);
+        cur = [];
+      }
+      if (v !== null) cur.push([x(i), s.scale(v)]);
+    });
+    if (cur.length) out.push(cur);
+    return out;
+  }
+  for (const s of series) s.runs = runsFor(s);
+
+  chartPoints.set(cfg.svgId, history.map((p, i) => ({ px: x(i), p })));
+
+  // Fills first, so no translucent wash lands on top of another series' line.
+  for (const s of series) {
+    if (!s.fill) continue;
+    const fill = css.getPropertyValue(s.fill).trim();
+    for (const run of s.runs) {
+      if (run.length < 2) continue;
+      svg.appendChild(svgEl('path', {
+        d: 'M' + run[0][0] + ',' + (H - padBot) + ' ' + run.map(q => 'L' + q[0] + ',' + q[1]).join(' ') +
+           ' L' + run[run.length - 1][0] + ',' + (H - padBot) + ' Z',
+        fill,
+      }));
+    }
+  }
+
+  for (const s of series) {
+    for (const run of s.runs) {
+      if (run.length === 1) {
+        svg.appendChild(svgEl('circle', { cx: run[0][0], cy: run[0][1], r: 2, fill: s.resolved }));
+        continue;
+      }
+      svg.appendChild(svgEl('polyline', {
+        points: run.map(q => q[0] + ',' + q[1]).join(' '),
+        fill: 'none', stroke: s.resolved, 'stroke-width': 2, 'stroke-linejoin': 'round',
+      }));
+    }
+  }
+
+  // End dot per series; a direct value label only where asked for (a series
+  // with axis ticks already spells its numbers out).
+  const labels = [];
+  for (const s of series) {
+    if (!s.runs.length) continue;
+    const pt = s.runs[s.runs.length - 1].slice(-1)[0];
+    svg.appendChild(svgEl('circle', { cx: pt[0], cy: pt[1], r: 4, fill: s.resolved }));
+    if (!s.endLabel) continue;
+    let last = null;
+    for (let i = history.length - 1; i >= 0; i--) {
+      const v = s.valueOf(history[i]);
+      if (v !== null) { last = v; break; }
+    }
+    if (last !== null) labels.push({ pt, color: s.resolved, text: (s.fmt || String)(last) });
+  }
+  // Push apart if two labels would overlap (11px type + 1).
+  if (labels.length === 2 && Math.abs(labels[0].pt[1] - labels[1].pt[1]) < 12) {
+    labels.sort((a, b) => a.pt[1] - b.pt[1]);
+    labels[0].y = Math.max(11, labels[0].pt[1] - 8);
+    labels[1].y = Math.min(H - padBot - 3, labels[1].pt[1] + 15);
+  }
+  for (const l of labels) {
+    const lbl = svgEl('text', {
+      x: Math.min(l.pt[0], plotR - 2),
+      y: l.y === undefined ? Math.max(l.pt[1] - 8, 11) : l.y,
+      'text-anchor': 'end', fill: l.color, 'font-size': 11,
+    });
+    lbl.textContent = l.text;
+    svg.appendChild(lbl);
+  }
+
+  const cross = svgEl('line', {
+    y1: padTop, y2: H - padBot,
+    stroke: css.getPropertyValue('--muted').trim(), 'stroke-width': 1, visibility: 'hidden',
+  });
+  cross.id = cfg.svgId + '-cross';
+  svg.appendChild(cross);
+}
+
+// One hover handler per chart. Every lookup is guarded: an exception here
+// would run at parse time and take the whole page's polling down with it.
+function wireHover(cfg) {
+  const wrap = $(cfg.wrapId);
+  const tip = $(cfg.tipId);
+  if (!wrap || !tip) return;
+
+  function row(swatch, value, key) {
+    const r = el('div', 'row');
+    r.appendChild(el('span', 'swatch ' + swatch));
+    r.appendChild(el('span', 'v', value));
+    r.appendChild(el('span', 'k', key));
+    return r;
+  }
+
+  wrap.addEventListener('mousemove', ev => {
+    const pts = chartPoints.get(cfg.svgId) || [];
+    const svg = $(cfg.svgId);
+    if (!pts.length || !svg) return;
+    const rect = svg.getBoundingClientRect();
+    const relX = ((ev.clientX - rect.left) / rect.width) * SPARK_W;
+    let best = pts[0];
+    for (const q of pts) if (Math.abs(q.px - relX) < Math.abs(best.px - relX)) best = q;
+    const cross = $(cfg.svgId + '-cross');
+    if (cross) {
+      cross.setAttribute('x1', best.px);
+      cross.setAttribute('x2', best.px);
+      cross.setAttribute('visibility', 'visible');
+    }
+    const rows = [el('div', 'hd', new Date(best.p.t).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }))];
+    for (const s of cfg.series) {
+      if (!s.key) continue;
+      const v = s.valueOf(best.p);
+      rows.push(row(s.swatch, v === null ? '—' : (s.fmt || String)(v), s.key));
+    }
+    if (cfg.extraRow) {
+      const extra = cfg.extraRow(best.p);
+      if (extra) rows.push(el('div', 'd', extra));
+    }
+    tip.style.display = 'block';
+    // Clamp so the tip never spills outside the card at either edge.
+    const leftPx = (best.px / SPARK_W) * rect.width;
+    tip.style.left = Math.min(Math.max(leftPx, 56), rect.width - 56) + 'px';
+    tip.style.top = '6px';
+    tip.replaceChildren.apply(tip, rows);
+  });
+
+  wrap.addEventListener('mouseleave', () => {
+    tip.style.display = 'none';
+    const cross = $(cfg.svgId + '-cross');
+    if (cross) cross.setAttribute('visibility', 'hidden');
+  });
+}
+
+// One chart, two scales: difficulty fitted to its own range (it never nears
+// zero, and its movement is the signal), hashrate zero-based with the area
+// fill. They share only the time axis, so each carries its own axis ticks.
+const MAIN_CHART = {
+  svgId: 'spark', wrapId: 'spark-wrap', tipId: 'spark-tip', emptyId: 'spark-empty',
+  series: [
+    {
+      valueOf: netOf, color: '--series-2', scale: 'minmax', side: 'left',
+      key: 'net difficulty', swatch: 's2', fmt: v => fmtNum(v, 3),
+    },
+    {
+      valueOf: solsOf, color: '--series', scale: 'zero', side: 'right',
+      fill: '--series-fill', key: 'pool', swatch: 's1',
+      fmt: v => fmtSols(v) + ' Sol/s', tickFmt: v => fmtSols(v),
+    },
+  ],
+  extraRow: p => (netSolsOf(p) === null ? 'no template' : '≈ ' + fmtSols(netSolsOf(p)) + ' Sol/s network'),
+};
+
+wireHover(MAIN_CHART);
+
+// ---- main render ----
+function render(s) {
+  // Node and block-alert health now have their own tiles, so the pill no
+  // longer repeats them. It reports on THIS PAGE instead: proof the poll is
+  // still landing, and the only place a fetch failure can surface.
+  lastUpdateAt = Date.now();
+  lastUptimeSec = s.uptimeSec;
+  pollError = null;
+  paintPill();
+
+  // Which algo this page is showing — and, when the pool serves two, the switcher.
+  $('sub').textContent = 'Kerrigan · ' + (s.algo ? s.algo.label : 'equihash 192/7') + ' · solo';
+  renderAlgoTabs(s);
+  renderTally(s);
+
+  // Only shown when something is actively costing records. `statePersisting`
+  // is absent on older servers, so treat undefined as fine rather than broken.
+  const alarm = $('alarm');
+  if (s.totals.statePersisting === false) {
+    alarm.replaceChildren(
+      el('b', null, 'Found blocks are not being recorded'),
+      el('span', null, 'The state file could not be read at startup, so the pool is refusing to ' +
+        'overwrite it. Mining and payouts are unaffected — the daemon still receives every block — ' +
+        'but nothing new is being saved. Check ownership and permissions on the data directory, ' +
+        'then restart. See the log for the exact error.')
+    );
+    alarm.hidden = false;
+  } else {
+    alarm.hidden = true;
+  }
+
+  const tiles = $('tiles');
+  // Twelve tiles, three rows of four at full width. Row 1 is the node, row 2
+  // where the round stands, row 3 the pool's own numbers.
+  tiles.replaceChildren(
+    nodeTile(s),
+    healthTile(s),
+    notifyTile(s),
+    tile('Next block height', fmtNum(s.pool.nextHeight, 0), 'miner reward ' + fmtKRGN(s.pool.minerRewardKRGN)),
+
+    tile('Network difficulty', fmtNum(s.network.difficulty, 0), 'net ≈ ' + fmtSols(s.network.solsEstimate) + ' Sol/s'),
+    tile('Est. time to block', fmtDur(s.pool.timeToBlockSec), ''),
+    effortTile(s),
+    tile('Avg effort', fmtEffort(s.pool.effortPct), effortSub(s)),
+
+    // Unit lives in the subtitle, not the big number — "985 Sol/s" wraps
+    // narrow and reads badly broken across two lines.
+    tile('Pool hashrate', fmtSols(s.pool.sols5m),
+      s.warmingUp ? 'Sol/s · warming up…' : 'Sol/s · 1h avg ' + fmtSols(s.pool.sols1h)),
+    tile('Blocks found', String(s.totals.blocksFound),
+      s.totals.acceptedShares.toLocaleString() + ' shares accepted'),
+    tile('Miners', String(s.pool.minersConnected), 'stratum port ' + s.pool.stratumPort),
+    peersTile(s)
+  );
+
+
+  renderChart(MAIN_CHART, s.history, s.historySampleMs);
+
+  renderTable($('workers-holder'),
+    [{ label: 'Worker' }, { label: 'IP' }, { label: 'Diff', num: true },
+     { label: 'Sol/s (5m)', num: true }, { label: 'Shares/min', num: true },
+     { label: 'Accepted', num: true }, { label: 'Rejected', num: true },
+     { label: 'Best share', num: true }, { label: 'Last share', num: true }],
+    s.workers ? s.workers.map(w => ([
+      { text: w.name },
+      { text: w.remote, cls: 'mono' },
+      { text: fmtNum(w.diff), cls: 'num' },
+      { text: fmtSols(w.sols), cls: 'num' },
+      { text: fmtNum(w.sharesPerMin), cls: 'num' },
+      { text: fmtNum(w.accepted, 0), cls: 'num' },
+      { text: fmtNum(w.rejected, 0), cls: 'num' },
+      { text: fmtNum(w.bestShareDiff), cls: 'num' },
+      { text: fmtAgo(w.lastShareAgoSec), cls: 'num' },
+    ])) : [],
+    'no miners connected — point your ' + (s.algo ? s.algo.label : 'equihash') +
+      ' miners at stratum port ' + s.pool.stratumPort);
+
+  renderTable($('blocks-holder'),
+    [{ label: 'Height', num: true }, { label: 'Found' }, { label: 'Worker' },
+     { label: 'Reward', num: true }, { label: 'Effort', num: true },
+     { label: 'Status' }, { label: 'Hash' }],
+    s.blocks.map(b => ([
+      { text: fmtNum(b.height, 0), cls: 'num' },
+      { text: fmtTime(b.foundAt) },
+      { text: b.worker },
+      { text: fmtKRGN(b.rewardKRGN), cls: 'num' },
+      { text: fmtEffort(b.effortPct), cls: 'num' },
+      { node: statusCell(b.status, b.confirmations, b.submitResult) },
+      { text: b.hash ? b.hash.slice(0, 16) + '…' : '—', cls: 'mono' },
+    ])),
+    'none yet — at the current rate expect one every ' + fmtDur(s.pool.timeToBlockSec));
+
+  const rejectEntries = Object.entries(s.rejects || {});
+  const rejectsCard = $('rejects-card');
+  if (rejectEntries.length) {
+    rejectsCard.classList.remove('hidden');
+    renderTable($('rejects-holder'),
+      [{ label: 'Reason' }, { label: 'Count', num: true }],
+      rejectEntries.sort((a, b) => b[1] - a[1]).map(([reason, count]) => ([
+        { text: reason },
+        { text: fmtNum(count, 0), cls: 'num' },
+      ])), '');
+  } else {
+    rejectsCard.classList.add('hidden');
+  }
+
+  $('foot').replaceChildren(
+    el('span', null, 'stratnum v' + s.version),
+    el('span', null, 'uptime ' + fmtDur(s.uptimeSec)),
+    el('span', null, 'lifetime: ' + s.totals.acceptedShares.toLocaleString() + ' accepted / ' +
+      s.totals.rejectedShares.toLocaleString() + ' rejected'),
+    el('span', null, 'last template ' + fmtAgo(s.node.lastTemplateAgoSec))
+  );
+}
+
+// The chart history is 60 KB of a 67 KB response and only changes every 20 s,
+// while this polls every 2 s. So we hold on to the last array we were given and
+// tell the server which one that is; it replies with a fresh array only when
+// ours is stale. Any mismatch — first load, reload, server restart — sends the
+// whole thing, so this cannot get stuck showing an old chart.
+let historyCache = [];
+let historySeq = null;
+
+// ---- which algo the page shows, when the pool serves two ----
+// Remembered per browser. The server answers with its first algo for anything
+// it does not recognise, and the page then follows whatever it answered.
+let selectedAlgo = null;
+try { selectedAlgo = localStorage.getItem('stratnum.algo'); } catch (e) { /* storage blocked */ }
+const algoTabs = new Map();   // algo key -> { b, meta }
+
+function selectAlgo(key) {
+  if (key === selectedAlgo) return;
+  selectedAlgo = key;
+  try { localStorage.setItem('stratnum.algo', key); } catch (e) { /* storage blocked */ }
+  for (const [k, t] of algoTabs) t.b.setAttribute('aria-pressed', String(k === key));
+  // The chart held now is the other algo's: drop it, so this poll brings the
+  // new one's in full.
+  historyCache = [];
+  historySeq = null;
+  poll();
+}
+
+// One button per algo with its own at-a-glance numbers, so the algo that is not
+// on screen is still visibly alive. Built once and updated in place — rebuilt
+// every poll, a click that straddled a refresh would be swallowed. Not shown
+// at all for a one-algo pool.
+function renderAlgoTabs(s) {
+  const nav = $('algos');
+  const list = Array.isArray(s.algos) ? s.algos : [];
+  nav.hidden = list.length < 2;
+  if (nav.hidden) return;
+  const keys = list.map(a => a.key).join(',');
+  if (nav.dataset.keys !== keys) {
+    algoTabs.clear();
+    nav.replaceChildren.apply(nav, list.map(a => {
+      const b = el('button', 'algo-tab');
+      b.type = 'button';
+      b.appendChild(el('b', null, a.label));
+      const meta = el('span', 'meta');
+      b.appendChild(meta);
+      b.addEventListener('click', () => selectAlgo(a.key));
+      algoTabs.set(a.key, { b, meta });
+      return b;
+    }));
+    nav.dataset.keys = keys;
+  }
+  for (const a of list) {
+    const t = algoTabs.get(a.key);
+    t.b.setAttribute('aria-pressed', String(!!s.algo && a.key === s.algo.key));
+    t.meta.textContent = fmtNum(a.miners, 0) + (a.miners === 1 ? ' miner' : ' miners') +
+      ' · ' + fmtSols(a.sols5m) + ' Sol/s · port ' + a.port;
+  }
+}
+
+// ---- the combined block count under the title ----
+// Summed over every algo the pool serves. It pops once whenever the count has
+// gone up since this browser last saw it, so a block found overnight still
+// gets its moment the next time the page is opened.
+let tallySeen = null;
+try {
+  const v = localStorage.getItem('stratnum.blocksSeen');
+  if (v !== null && Number.isFinite(Number(v))) tallySeen = Number(v);
+} catch (e) { /* storage blocked */ }
+
+function renderTally(s) {
+  const list = Array.isArray(s.algos) && s.algos.length ? s.algos : null;
+  const total = list ? list.reduce((n, a) => n + (a.blocksFound || 0), 0) : s.totals.blocksFound;
+  $('tally').hidden = false;
+  const num = $('tally-num');
+  const text = fmtNum(total, 0);
+  if (num.textContent !== text) num.textContent = text;
+  $('tally-label').textContent = total === 1 ? 'block found' : 'blocks found';
+  // The per-algo split, only when there is something to split.
+  $('tally-split').textContent = list && list.length > 1
+    ? list.map(a => a.short + ': ' + fmtNum(a.blocksFound, 0)).join(' · ') : '';
+  if (tallySeen !== null && total > tallySeen) {
+    num.classList.remove('pop');
+    void num.offsetWidth;            // restart the pop if one is already running
+    num.classList.add('pop');
+  }
+  if (total !== tallySeen) {
+    tallySeen = total;
+    try { localStorage.setItem('stratnum.blocksSeen', String(total)); } catch (e) { /* storage blocked */ }
+  }
+}
+$('tally-num').addEventListener('animationend', e => {
+  if (e.animationName === 'tally-pop') e.target.classList.remove('pop');
+});
+
+async function poll() {
+  const want = selectedAlgo;
+  try {
+    const q = [];
+    if (want) q.push('algo=' + encodeURIComponent(want));
+    if (historySeq !== null) q.push('h=' + encodeURIComponent(historySeq));
+    const res = await fetch('/api/stats' + (q.length ? '?' + q.join('&') : ''), { cache: 'no-store' });
+    if (!res.ok) throw new Error('http ' + res.status);
+    const s = await res.json();
+    // The switcher moved while this was in flight, so this answer — chart
+    // included — is about the other algo. The poll selectAlgo started has it.
+    if (want !== selectedAlgo) return;
+    if (s.algo && s.algo.key) selectedAlgo = s.algo.key;
+    // An ABSENT key means "keep what you have"; null or [] would mean "empty".
+    if (s.history !== undefined) historyCache = s.history;
+    historySeq = s.historySeq === undefined ? null : s.historySeq;
+    s.history = historyCache;
+    render(s);
+  } catch (err) {
+    if (want !== selectedAlgo) return;
+    pollError = err.message;
+    paintPill();
+  }
+}
+
+poll();
+setInterval(poll, POLL_MS);
+// Ticks on its own second, not the poll's: a frozen page has to be able to
+// say how stale it is, and that is precisely when poll() has stopped running.
+setInterval(paintPill, 1000);
+// Browsers throttle timers in background tabs, so a dashboard left open on
+// another tab comes back holding minutes-old numbers. Refresh on return
+// rather than showing stale figures until the next interval fires.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) { paintPill(); poll(); }
+});
+</script>
+</body>
+</html>

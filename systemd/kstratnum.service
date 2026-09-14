@@ -1,0 +1,35 @@
+[Unit]
+Description=stratnum — KRGN solo stratum server (equihash 192/7 + 200/9)
+After=network-online.target knode.service
+Wants=network-online.target knode.service
+
+[Service]
+Type=simple
+User=kritch
+Group=kritch
+WorkingDirectory=/home/kritch/krgn_stratnum
+ExecStart=/home/kritch/.nvm/versions/node/v24.21.0/bin/node server.js
+
+Restart=on-failure
+RestartSec=15
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=stratnum
+
+ReadWritePaths=/home/kritch/krgn_stratnum/data
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=no
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
