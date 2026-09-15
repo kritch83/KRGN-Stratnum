@@ -3,6 +3,9 @@
 Solo stratum mining server + dashboard for **Kerrigan (KRGN)**, **equihash 192/7
 and 200/9** — either one, or both at once, each on its own stratum port.
 
+
+![dashboard](dash.png)
+
 Pure Node.js, **zero npm dependencies**. Point it at your own kerrigan node,
 point your GPUs at it, and every block you find pays your address directly.
 
