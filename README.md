@@ -1,13 +1,12 @@
-# stratnum
+# KRGN stratnum
 
-Solo stratum mining server + dashboard for **Kerrigan (KRGN)**, **equihash 192/7
+Solo stratum mining server + customizable themed (80s themes, thats right) dashboard using ZMQ for **Kerrigan (KRGN)**, **equihash 192/7
 and 200/9** — either one, or both at once, each on its own stratum port.
-
 
 ![dashboard](dash.png)
 
 Pure Node.js, **zero npm dependencies**. Point it at your own kerrigan node,
-point your GPUs at it, and every block you find pays your address directly.
+point your GPUs & ASICs at it, and every block you find pays your address directly.
 
 ```
 GPU rigs (miniZ / GMiner)  ──stratum tcp──▶  stratnum  ──JSON-RPC──▶  kerrigan node
@@ -18,17 +17,23 @@ GPU rigs (miniZ / GMiner)  ──stratum tcp──▶  stratnum  ──JSON-RPC�
 Solo is simple here because the daemon **builds the entire coinbase itself**
 when the pool passes `pooladdress` in `getblocktemplate`, including the
 consensus-enforced treasury/masternode outputs and the CbTx payload. stratnum
-never constructs a coinbase, so it cannot get the payout wrong.
+never constructs a coinbase, so it cannot get the payout wrong & is super quick.
 
 ## Requirements
 
-- Node.js ≥ 18 (an active LTS is the safer choice)
+- Node.js ≥ 18
 - A synced kerrigan node you control
 - A KRGN payout address (starts with `K`)
 
+
+***Quick Start***
+
+
+
+
 ## 1. Configure the kerrigan node
 
-In `~/.kerrigan/kerrigan.conf`:
+In (default location) `~/.kerrigan/kerrigan.conf`:
 
 ```ini
 server=1
@@ -109,33 +114,11 @@ each algo through the full pipeline:
 npm test
 ```
 
-### Run both as services (Ubuntu)
+### Services (Ubuntu)
 
-`contrib/` holds systemd units for the node and the pool. The helper fills in
-this machine's paths, writes copies to `contrib/generated/`, and prints the
-install commands. It needs no sudo and touches nothing that is running:
 
-```bash
-bash contrib/install-services.sh
-```
 
-```bash
-sudo cp contrib/generated/kerrigand.service contrib/generated/stratnum.service /etc/systemd/system/
-```
-
-```bash
-sudo systemctl daemon-reload
-```
-
-```bash
-sudo systemctl enable --now kerrigand stratnum
-```
-
-```bash
-journalctl -u stratnum -f
-```
-
-How they are wired:
+How its wired:
 
 - The node runs with `-daemon=0` so systemd supervises it directly (this
   overrides `daemon=1` in kerrigan.conf). Stop any hand-started node first, or
@@ -306,7 +289,7 @@ it. `"enabled": false` switches an algo off — add
 smaller number there. Copy your 192/7 values across and a rig's first share can
 take hours; vardiff finds the level either way.
 
-- **Open the port** for remote rigs: `sudo ufw allow 3200/tcp`.
+- **if needed open the port** for remote rigs: `sudo ufw allow 3200/tcp`.
 - **Alerts stay one set.** A rig is a name whichever port it is on, so moving
   one between algos is not an "offline" push. Block messages name the algo:
   `Block found — height 142,781 (200/9)`.
@@ -427,7 +410,7 @@ On Linux that one socket serves **both** families, so `::` is a superset of
 
 ## Coinbase tag (the explorer "miner" field)
 
-Explorers identify a block's miner from an ASCII signature in the coinbase
+Explorers, not all :-( identify a block's miner from an ASCII signature in the coinbase
 input script; daemon-built coinbases carry none, which renders as "—". Set:
 
 ```json
@@ -515,10 +498,18 @@ lib/                 algos (what differs between 192/7 and 200/9), blake2b,
                      shares, vardiff, daemon RPC, zmq, stats, dashboard,
                      notify (pushover transport) + alerts (which events, when)
 web/index.html       self-contained dashboard (no external assets)
-contrib/             systemd units + a helper that fills in this box's paths
 test/                204 tests incl. full-system e2e runs against a mock daemon,
                      with a real mainnet block per algo as the fixture oracle
 data/state.json      found blocks + lifetime counters (auto-created; 192/7)
 data/history.json    hashrate chart samples, so the graph survives a restart
 data/*-equihash200.json  the same two files for 200/9, when it is on
+```
+
+Happy Hashing!
+
+You like my work?  Why thank you!  *\*rattles tip jar\**
+```
+KRGN(shielded): ks1rjmtwyxl9ynaht4ur9sx87mrzf4pf5jzrts5lmsh2fckdkfwxwazxdmklwe9xfzakdp6xkx9g4g
+KRGN: KVa6TjjUmBsZGTWSDQ6Xhd3wG1tA1yvM8j
+BTC: bc1qlwp4pvxcsce0h0m3ww6mxxw0mhnxaanwv84pal
 ```
