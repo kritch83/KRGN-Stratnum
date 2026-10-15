@@ -93,7 +93,7 @@ cp config.example.json config.json
 | `pool.retainJobs` | How many recent jobs stay valid for submission, so a share arriving just after a new job isn't lost. **Not** cleared when a block lands. |
 | `pool.equihash200` | Adds an **equihash 200/9** port — `{ "port": 3200 }` is enough. See "Both algos" below. |
 | `dashboard.enabled` / `host` / `port` | The web UI. `127.0.0.1` + an SSH tunnel is the safe default; exposing it reveals worker names, your rigs' IPs and your node's public IP (read-only, no payout address). |
-| `dashboard.historySamples` | Chart points, one per 20 s (360 ≈ 2 h). Also sizes `data/history.json`. 10–5000. |
+| `dashboard.historySamples` | Raw chart samples kept, one per 20 s — these drive the **1h** view, so keep it at 180 or more. The 24h and 7d views are kept separately as 5- and 30-minute averages. All are saved to `data/history.json`. 10–5000. |
 | `dashboard.theme` | `default`, `80s-neon`, `80s-sunset` or `80s-miami` — see Themes. Read at startup. |
 | `data.dir` | Where `state.json` (found blocks, counters) and `history.json` (chart) live, plus `*-equihash200.json` when 200/9 is on |
 | `log.level` | `error` / `warn` / `info` / `debug`. `debug` also logs every non-clean job refresh. |
@@ -176,8 +176,11 @@ ssh -L 8080:127.0.0.1:8080 pool-host
   the node tiles are shared.
 - **Chart** — network difficulty (left axis) against pool hashrate (right
   axis). Separate scales, so a crossing means nothing; read each against the
-  ticks in its own colour. It survives a restart and draws a gap, not a zero,
-  when the node had no template.
+  ticks in its own colour. The **1h / 24h / 7d** buttons pick the window (your
+  browser remembers the choice): 1h shows every 20-second sample, 24h shows
+  5-minute averages and 7d half-hour averages. The x-axis is real time, so
+  downtime shows as an empty stretch rather than being squeezed out. It
+  survives a restart and draws a gap, not a zero, when the node had no template.
 - **Health row** — Node (online/offline with the transport error), Node health
   (below), Peers split in/out, and Block alerts: green when ZMQ notifications
   flow, grey when unconfigured, red when configured but broken.
@@ -483,7 +486,9 @@ Discord to map it; your blocks carry the tag either way.
   window (capped, oldest dropped first), and 20 consecutive invalid solutions
   end the connection.
 - **The chart is sent only when it changes** — the page passes the sequence it
-  holds as `?h=`, cutting the response by 88%.
+  holds as `?h=`, cutting the response by 88%. The longer ranges are running
+  sums per time bucket, so they cost the same to store and send as the 1h view
+  and carry on across a restart mid-bucket.
 - Block identity hashes are X11 for *all* algos here; stratnum never computes
   them, confirming acceptance through the node and tracking the coinbase txid
   to 100 confirmations.

@@ -506,5 +506,117 @@ const tests = [
       assertEq(s2.history[0].netDiff, null, 'and records a gap');
     },
   },
+  {
+    name: 'the 24h and 7d chart ranges are bucket averages, built one sample at a time',
+    fn() {
+      const T0 = 1_800_000_000_000; // a whole number of 30-minute buckets
+      const nowRef = { t: T0 };
+      const stats = makeStats(tmpDir(), nowRef, { historySamples: 180 });
+      // 30 minutes at the 20 s cadence: difficulty 100 for the first half, then 200.
+      for (let i = 0; i < 90; i++) {
+        nowRef.t = T0 + i * 20000;
+        stats.recordSample(i < 45 ? 100 : 200);
+      }
+      const day = stats.chartHistory('24h');
+      assertEq(day.map(p => p.netDiff), [100, 100, 100, 200, 200, 200], 'six 5-minute buckets');
+      assertEq(day[0].t, T0 + 150000, 'plotted at the bucket midpoint');
+      assertEq(Object.keys(day[0]).sort(), ['netDiff', 'netSols', 'sols', 't'], 'same shape as a raw sample');
+      const week = stats.chartHistory('7d');
+      assertEq(week.length, 1);
+      assertEq(week[0].netDiff, 150, 'one 30-minute bucket, averaged');
+      assertClose(week[0].netSols, util.netSolsFromDiff(150), 0.01);
+      assertEq([stats.chartStepMs('1h'), stats.chartStepMs('24h'), stats.chartStepMs('7d')], [20000, 300000, 1800000]);
+
+      // Five minutes with no template: a bucket of gaps, never of zeros.
+      for (let i = 90; i < 105; i++) {
+        nowRef.t = T0 + i * 20000;
+        stats.recordSample(null);
+      }
+      const gap = stats.chartHistory('24h').pop();
+      assertEq([gap.netDiff, gap.netSols], [null, null]);
+      // A bucket still filling is plotted at its latest sample, so the line ends at "now".
+      nowRef.t = T0 + 105 * 20000;
+      stats.recordSample(300);
+      const live = stats.chartHistory('24h').pop();
+      assertEq([live.t, live.netDiff], [nowRef.t, 300]);
+    },
+  },
+  {
+    name: 'each chart range keeps only its own window',
+    fn() {
+      const T0 = 1_800_000_000_000;
+      const nowRef = { t: T0 };
+      const stats = makeStats(tmpDir(), nowRef, { historySamples: 180 });
+      stats.recordSample(100);
+      nowRef.t = T0 + 25 * 3600 * 1000; // a day and an hour later
+      stats.recordSample(200);
+      assertEq(stats.chartHistory('24h').map(p => p.netDiff), [200], 'yesterday has left the 24h view');
+      assertEq(stats.chartHistory('7d').map(p => p.netDiff), [100, 200], 'but not the week');
+      assertEq(stats.rollups['24h'].length, 1, 'and is not held in memory either');
+      assertEq(stats.chartHistory('1h').map(p => p.netDiff), [200], '1h is the raw samples of the last hour');
+    },
+  },
+  {
+    name: 'the longer ranges survive a restart mid-bucket, without counting anything twice',
+    fn() {
+      const dir = tmpDir();
+      const T0 = 1_800_000_000_000;
+      const nowRef = { t: T0 };
+      const a = makeStats(dir, nowRef, { historySamples: 180 });
+      for (let i = 0; i < 5; i++) {
+        nowRef.t = T0 + i * 20000;
+        a.recordSample(100);
+      }
+      a.saveHistory();
+      assertEq(JSON.parse(fs.readFileSync(path.join(dir, 'history.json'), 'utf8')).version, 2);
+
+      const b = makeStats(dir, nowRef, { historySamples: 180 }); // the restart
+      assertEq(b.rollups['24h'].length, 1);
+      assertEq(b.rollups['24h'][0].n, 5, 'loaded from the file, not re-folded from the raw samples too');
+      for (let i = 5; i < 10; i++) {
+        nowRef.t = T0 + i * 20000;
+        b.recordSample(200);
+      }
+      assertEq(b.rollups['24h'][0].n, 10, 'the same bucket carried on');
+      assertEq(b.chartHistory('24h')[0].netDiff, 150);
+      assertEq(b.chartHistory('7d')[0].netDiff, 150);
+    },
+  },
+  {
+    name: 'a history file from before the ranges existed seeds them; malformed buckets are dropped',
+    fn() {
+      const T0 = 1_800_000_000_000;
+      const nowRef = { t: T0 + 200000 };
+      // historySamples 5 x 20 s keeps raw samples up to 100 s old.
+      const dir = tmpDir();
+      fs.writeFileSync(path.join(dir, 'history.json'), JSON.stringify({ version: 1, history: [
+        { t: T0 + 140000, sols: 10, netSols: 2, netDiff: 100 },
+        { t: T0 + 160000, sols: 20, netSols: 4, netDiff: 200 },
+        { t: T0 + 180000, sols: 30, netSols: null, netDiff: null },
+      ] }));
+      const s = makeStats(dir, nowRef);
+      assertEq(s.rollups['24h'].length, 1, 'seeded from the raw samples');
+      const p = s.chartHistory('24h')[0];
+      assertEq([p.sols, p.netDiff, p.netSols], [20, 150, 3], 'averaged, with the gap left out of the difficulty');
+
+      const dir2 = tmpDir();
+      const good = { t: T0, last: T0 + 20000, n: 2, sSum: 10, dN: 2, dSum: 200, nsSum: 4 };
+      fs.writeFileSync(path.join(dir2, 'history.json'), JSON.stringify({ version: 2, history: [], rollups: {
+        '24h': [
+          good,
+          Object.assign({}, good),                                          // the same bucket twice
+          Object.assign({}, good, { t: T0 + 7 }),                           // not on a bucket boundary
+          Object.assign({}, good, { t: T0 + 300000, last: T0 + 600000 }),   // last sample outside its bucket
+          Object.assign({}, good, { t: T0 + 600000, last: T0 + 600000, dN: 3 }), // more difficulties than samples
+          Object.assign({}, good, { t: T0 + 900000, last: T0 + 900000, sSum: 'x' }),
+          'junk', null,
+        ],
+        '7d': 'not an array',
+      } }));
+      const s2 = makeStats(dir2, nowRef);
+      assertEq(s2.rollups['24h'].length, 1, 'only the well-formed bucket survives');
+      assertEq(s2.rollups['7d'].length, 0);
+    },
+  },
 ];
 module.exports = { tests };

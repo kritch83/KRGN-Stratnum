@@ -267,6 +267,14 @@ html[data-theme^="80s"] { overflow-x: hidden; }
 .swatch { display: inline-block; width: 10px; height: 2px; border-radius: 1px; flex: none; }
 .swatch.s1 { background: var(--series); }
 .swatch.s2 { background: var(--series-2); }
+/* Chart range picker. The selected button is marked with a tint and an
+   underline in the series colour rather than a solid fill, so it stays
+   legible on every theme's palette. */
+.ranges { display: inline-flex; align-self: center; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; font-size: 12px; font-weight: 500; }
+.ranges button { font: inherit; color: var(--ink-2); background: transparent; border: 0; padding: 2px 10px; cursor: pointer; }
+.ranges button + button { border-left: 1px solid var(--border); }
+.ranges button:hover { color: var(--ink); }
+.ranges button[aria-pressed="true"] { color: var(--ink); font-weight: 600; background: var(--series-fill); box-shadow: inset 0 -2px 0 var(--series); }
 
 .spark-wrap { position: relative; }
 .spark { display: block; width: 100%; height: 130px; }
@@ -317,7 +325,9 @@ footer { color: var(--muted); font-size: 12px; margin-top: 18px; display: flex; 
   <section class="tiles" id="tiles"></section>
 
   <section class="card chart-card" id="hashrate-card">
-    <h2>Difficulty &amp; hashrate<span class="unit">separate scales — network difficulty on the left, pool Sol/s on the right</span>
+    <h2>Difficulty &amp; hashrate
+      <span class="ranges" id="ranges" role="group" aria-label="Chart range"><button type="button" data-range="1h">1h</button><button type="button" data-range="24h">24h</button><button type="button" data-range="7d">7d</button></span>
+      <span class="unit">separate scales — network difficulty on the left, pool Sol/s on the right</span>
       <span class="legend">
         <span class="key"><span class="swatch s2"></span>net difficulty</span>
         <span class="key"><span class="swatch s1"></span>pool Sol/s</span>
@@ -623,7 +633,8 @@ function svgEl(tag, attrs) {
 // cfg.series entries: { valueOf, color (css var), scale: 'zero'|'minmax',
 // side: 'left'|'right' (draws axis ticks), fill (css var), endLabel,
 // key + swatch (tooltip row), fmt, tickFmt }.
-function renderChart(cfg, history, sampleMs) {
+// win: { now, spanMs, range } — the time window the chart covers.
+function renderChart(cfg, history, sampleMs, win) {
   const svg = $(cfg.svgId);
   const empty = $(cfg.emptyId);
   if (!svg || !empty) return;
@@ -645,7 +656,16 @@ function renderChart(cfg, history, sampleMs) {
   const plotR = W - (cfg.series.some(s => s.side === 'right') ? 48 : 4);
   svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
 
-  const x = i => plotL + (i / (history.length - 1)) * (plotR - plotL);
+  // With a window the x-axis is TIME: the 24h view spans 24 hours even when the
+  // pool has only been up for one, and an outage shows as the empty stretch it
+  // was. Without one (an older server) samples are simply spaced evenly.
+  const tEnd = win && win.spanMs ? win.now : null;
+  const tStart = tEnd !== null ? tEnd - win.spanMs : null;
+  const x = tEnd !== null
+    ? i => plotL + Math.min(1, Math.max(0, (history[i].t - tStart) / (tEnd - tStart))) * (plotR - plotL)
+    : i => plotL + (i / (history.length - 1)) * (plotR - plotL);
+  // Read by the hover handler, which labels the tooltip to match.
+  cfg.current = { range: win ? win.range : null, stepMs: sampleMs };
 
   // Each series carries its OWN scale. 'zero' is for rates, where zero is
   // meaningful; 'minmax' is for values like difficulty that never approach
@@ -690,6 +710,16 @@ function renderChart(cfg, history, sampleMs) {
     x1: plotL, x2: plotR, y1: H - padBot, y2: H - padBot,
     stroke: css.getPropertyValue('--baseline').trim(), 'stroke-width': 1,
   }));
+
+  // Where the window starts and ends, so a range switch reads at a glance.
+  if (tEnd !== null) {
+    const edgeColor = css.getPropertyValue('--muted').trim();
+    for (const [xx, anchor, text] of [[plotL, 'start', RANGE_START[win.range] || ''], [plotR, 'end', 'now']]) {
+      const edge = svgEl('text', { x: xx, y: H - 3, 'text-anchor': anchor, fill: edgeColor, 'font-size': 10 });
+      edge.textContent = text;
+      svg.appendChild(edge);
+    }
+  }
 
   // Axis ticks, in each series' own colour — this is what makes two scales on
   // one chart readable as numbers rather than shapes.
@@ -826,7 +856,13 @@ function wireHover(cfg) {
       cross.setAttribute('x2', best.px);
       cross.setAttribute('visibility', 'visible');
     }
-    const rows = [el('div', 'hd', new Date(best.p.t).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }))];
+    // Longer ranges get the weekday, and say that each point is an average.
+    const cur = cfg.current || {};
+    const when = new Date(best.p.t).toLocaleString('en-US', cur.range && cur.range !== '1h'
+      ? { weekday: 'short', hour: '2-digit', minute: '2-digit' }
+      : { hour: '2-digit', minute: '2-digit' });
+    const avg = cur.stepMs >= 60000 ? ' · ' + Math.round(cur.stepMs / 60000) + '-min avg' : '';
+    const rows = [el('div', 'hd', when + avg)];
     for (const s of cfg.series) {
       if (!s.key) continue;
       const v = s.valueOf(best.p);
@@ -928,7 +964,8 @@ function render(s) {
   );
 
 
-  renderChart(MAIN_CHART, s.history, s.historySampleMs);
+  renderChart(MAIN_CHART, s.history, s.historySampleMs,
+    { now: s.now, spanMs: s.historySpanMs, range: s.historyRange });
 
   renderTable($('workers-holder'),
     [{ label: 'Worker' }, { label: 'IP' }, { label: 'Diff', num: true },
@@ -1014,6 +1051,38 @@ function selectAlgo(key) {
   poll();
 }
 
+// ---- chart range: 1h of raw samples, or 24h / 7d of averages ----
+// Remembered per browser, like the algo.
+const RANGES = ['1h', '24h', '7d'];
+const RANGE_START = { '1h': '1 hour ago', '24h': '24 hours ago', '7d': '7 days ago' };
+let selectedRange = '1h';
+try {
+  const v = localStorage.getItem('stratnum.range');
+  if (RANGES.includes(v)) selectedRange = v;
+} catch (e) { /* storage blocked */ }
+
+function paintRanges() {
+  for (const b of document.querySelectorAll('#ranges button')) {
+    b.setAttribute('aria-pressed', String(b.dataset.range === selectedRange));
+  }
+}
+
+function selectRange(range) {
+  if (range === selectedRange || !RANGES.includes(range)) return;
+  selectedRange = range;
+  try { localStorage.setItem('stratnum.range', range); } catch (e) { /* storage blocked */ }
+  paintRanges();
+  // Same as switching algo: the chart held now belongs to the old range.
+  historyCache = [];
+  historySeq = null;
+  poll();
+}
+
+for (const b of document.querySelectorAll('#ranges button')) {
+  b.addEventListener('click', () => selectRange(b.dataset.range));
+}
+paintRanges();
+
 // One button per algo with its own at-a-glance numbers, so the algo that is not
 // on screen is still visibly alive. Built once and updated in place — rebuilt
 // every poll, a click that straddled a refresh would be swallowed. Not shown
@@ -1083,16 +1152,17 @@ $('tally-num').addEventListener('animationend', e => {
 
 async function poll() {
   const want = selectedAlgo;
+  const wantRange = selectedRange;
   try {
-    const q = [];
+    const q = ['range=' + encodeURIComponent(wantRange)];
     if (want) q.push('algo=' + encodeURIComponent(want));
     if (historySeq !== null) q.push('h=' + encodeURIComponent(historySeq));
     const res = await fetch('/api/stats' + (q.length ? '?' + q.join('&') : ''), { cache: 'no-store' });
     if (!res.ok) throw new Error('http ' + res.status);
     const s = await res.json();
-    // The switcher moved while this was in flight, so this answer — chart
-    // included — is about the other algo. The poll selectAlgo started has it.
-    if (want !== selectedAlgo) return;
+    // The algo or range moved while this was in flight, so this answer — chart
+    // included — is about the old choice. The poll that switch started has it.
+    if (want !== selectedAlgo || wantRange !== selectedRange) return;
     if (s.algo && s.algo.key) selectedAlgo = s.algo.key;
     // An ABSENT key means "keep what you have"; null or [] would mean "empty".
     if (s.history !== undefined) historyCache = s.history;
@@ -1100,7 +1170,7 @@ async function poll() {
     s.history = historyCache;
     render(s);
   } catch (err) {
-    if (want !== selectedAlgo) return;
+    if (want !== selectedAlgo || wantRange !== selectedRange) return;
     pollError = err.message;
     paintPill();
   }
