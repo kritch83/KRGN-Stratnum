@@ -185,8 +185,20 @@ function parseRealBlock(algo) {
 // would have served it just before that block was mined. The daemon's
 // header_hex carries its own (zero) nonce; only bytes 0..107 are comparable.
 // KawPoW template as the daemon would have served it for a real block. Its
-// `headerhash` is the real header's, so the job's nNonce-convention check
-// lands on whatever the block's miner used (the height, for these blocks).
+// `headerhash` is computed the node's way (src/rpc/mining.cpp): over the
+// template's own header, merkle root left zeroed. nNonce is the one liberty —
+// the live node puts 0 there, but these blocks' pool put the height, and
+// keeping it is what lets the job's nNonce check land on the height so the
+// replay reproduces the real block byte for byte.
+// The node's GBT `headerhash` for a template whose header is `header`, with
+// its merkle root zeroed and `nNonce` in the nonce field (0 on the live node).
+function daemonHeaderHash(header, nNonce) {
+  const h = Buffer.from(header);
+  h.fill(0, 36, 68);
+  h.writeUInt32LE(nNonce >>> 0, 76);
+  return util.reverseBuf(util.sha256d(h));
+}
+
 function gbtFromKawpowBlock(overrides, key) {
   const s = spec(key);
   const blk = parseKawpowBlock(key);
@@ -205,7 +217,7 @@ function gbtFromKawpowBlock(overrides, key) {
     transactions: blk.txs.slice(1).map((tx, i) => ({ data: tx.toString('hex'), txid: blk.txids[i + 1], hash: blk.txids[i + 1] })),
     coinbasevalue: 2500000000,
     coinbasevalue_miner: 500000000,
-    headerhash: blk.headerHash.toString('hex'),
+    headerhash: daemonHeaderHash(blk.header, f.nNonce).toString('hex'),
     seedhash: kawpow.epochSeed(kawpow.epochOf(s.height)).toString('hex'),
     longpollid: 'lp-' + s.height,
     template_hash: vec.hash,
@@ -350,6 +362,6 @@ function realShare(algo) {
 
 module.exports = {
   loadBlockJson, loadRawBlockHex, parseRealBlock, parseHeader, parseHeader80, gbtFromRealBlock, realShare,
-  x11DaemonCoinbase, x11MinerAssemble,
+  x11DaemonCoinbase, x11MinerAssemble, daemonHeaderHash,
   SOLUTION_PREFIX, REAL,
 };

@@ -166,13 +166,21 @@ const tests = [
     fn() {
       const base = fixtures.gbtFromRealBlock({}, 'kawpow');
       const blk = fixtures.parseRealBlock('kawpow');
-      // What the node itself serves: headerhash computed with nNonce = 0.
-      const zeroHeader = Buffer.from(blk.header);
-      zeroHeader.writeUInt32LE(0, 76);
-      const tpl0 = Object.assign({}, base, { headerhash: jobLib.headerHashOf(zeroHeader).toString('hex') });
+      // Exactly what the live node serves (src/rpc/mining.cpp): headerhash
+      // over its template header, merkle root never filled in, nNonce = 0.
+      // The job must still carry the REAL merkle root.
+      const tpl0 = Object.assign({}, base, { headerhash: fixtures.daemonHeaderHash(blk.header, 0).toString('hex') });
       const job0 = jobLib.buildJob(tpl0, 'j', { algo });
+      assert(job0.headerHashChecked);
       assertEq(job0.headerNonce, 0);
       assertEq(job0.header.readUInt32LE(76), 0);
+      assertEq(job0.header.subarray(36, 68), blk.fields.merkleRoot, 'the real merkle root, not the zeroed one');
+      assertEq(job0.header.subarray(0, 76), blk.header.subarray(0, 76), 'every other field as on chain');
+      // A node that did fill in the merkle root is followed too.
+      const filled = Buffer.from(blk.header);
+      filled.writeUInt32LE(0, 76);
+      const tplFilled = Object.assign({}, base, { headerhash: jobLib.headerHashOf(filled).toString('hex') });
+      assertEq(jobLib.buildJob(tplFilled, 'j', { algo }).header, filled);
       const err = assertThrows(() => jobLib.buildJob(Object.assign({}, base, { headerhash: 'ab'.repeat(32) }), 'j', { algo }));
       assert(/headerhash self-check failed/.test(err.message), err.message);
       const err2 = assertThrows(() => jobLib.buildJob(Object.assign({}, base, { seedhash: 'cd'.repeat(32) }), 'j', { algo }));
