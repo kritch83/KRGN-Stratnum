@@ -108,6 +108,54 @@ const tests = [
         JSON.stringify(errs));
     },
   },
+  {
+    name: 'pool.kawpow adds a KawPoW port with its own defaults, and its rpcalgoport if given',
+    fn() {
+      const raw = base();
+      raw.pool.kawpow = { nodePort: 1929 };
+      const r = resolve(raw);
+      assertEq(r.errors, []);
+      const kp = r.cfg.ports.find(p => p.algo.key === 'kawpow');
+      assertEq([kp.port, kp.startDiff, kp.minDiff, kp.maxDiff, kp.nodePort], [3195, 0.25, 0.005, 1000, 1929]);
+      assertEq(kp.algo.unit, 'H/s');
+      const off = base();
+      off.pool.kawpow = { enabled: false, port: 3195 };
+      assertEq(resolve(off).cfg.ports.map(p => p.algo.key), ['equihash192'], 'enabled:false leaves it out');
+    },
+  },
+  {
+    name: 'nodePort: each algo reads templates from node.port unless given its own rpcalgoport',
+    fn() {
+      const raw = base();
+      raw.pool.equihash200 = { port: 3200, nodePort: 2009 };
+      const r = resolve(raw);
+      assertEq(r.errors, []);
+      assertEq(r.cfg.ports.map(p => [p.algo.key, p.nodePort]), [['equihash192', 7121], ['equihash200', 2009]],
+        'unset falls back to node.port (7121 by default)');
+      const bad = base();
+      bad.pool.equihash200 = { nodePort: 'x' };
+      assert(resolve(bad).errors.some(e => /pool\.equihash200\.nodePort must be 1\.\.65535/.test(e)),
+        JSON.stringify(resolve(bad).errors));
+    },
+  },
+  {
+    name: 'pool.x11 adds an X11 port with its own defaults, its rpcalgoport if given',
+    fn() {
+      const raw = base();
+      raw.pool.x11 = { nodePort: 1930 };
+      const r = resolve(raw);
+      assertEq(r.errors, []);
+      const x = r.cfg.ports.find(p => p.algo.key === 'x11');
+      assertEq([x.port, x.startDiff, x.minDiff, x.maxDiff, x.nodePort], [3197, 1024, 1, 100000, 1930]);
+      assertEq([x.algo.unit, x.algo.family], ['H/s', 'bitcoin']);
+      const all = base();
+      all.pool.equihash200 = {};
+      all.pool.kawpow = { nodePort: 1929 };
+      all.pool.x11 = { nodePort: 1930 };
+      assertEq(ports(resolve(all)), [['equihash192', 3192], ['equihash200', 3200], ['kawpow', 3195], ['x11', 3197]],
+        'all four algos, each on its own port');
+    },
+  },
 ];
 
 module.exports = { tests };

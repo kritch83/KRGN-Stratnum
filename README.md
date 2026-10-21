@@ -1,7 +1,7 @@
 # KRGN stratnum
 
-Solo stratum mining server + customizable themed (80s themes, thats right) dashboard using ZMQ for **Kerrigan (KRGN)**, **equihash 192/7
-and 200/9** — either one, or both at once, each on its own stratum port.
+Solo stratum mining server + customizable themed (80s themes, thats right) dashboard using ZMQ for **Kerrigan (KRGN)**, all four of its
+algos — **equihash 192/7, equihash 200/9, KawPoW and X11** — any one, or all at once, each on its own stratum port.
 
 ![dashboard](dash.png)
 
@@ -9,15 +9,17 @@ Pure Node.js, **zero npm dependencies**. Point it at your own kerrigan node,
 point your GPUs & ASICs at it, and every block you find pays your address directly.
 
 ```
-GPU rigs (miniZ / GMiner)  ──stratum tcp──▶  stratnum  ──JSON-RPC──▶  kerrigan node
-                                                 │
-                                       dashboard (http, localhost)
+GPU rigs (miniZ / GMiner / T-Rex)  ──stratum tcp──▶  stratnum  ──JSON-RPC──▶  kerrigan node
+X11 ASICs                          ──stratum tcp──▶     │
+                                               dashboard (http, localhost)
 ```
 
 Solo is simple here because the daemon **builds the entire coinbase itself**
 when the pool passes `pooladdress` in `getblocktemplate`, including the
 consensus-enforced treasury/masternode outputs and the CbTx payload. stratnum
 never constructs a coinbase, so it cannot get the payout wrong & is super quick.
+(On X11 it only adds a pushdata for the ASICs' extranonce to the coinbase's
+input script; every output and the payload stay the daemon's, byte for byte.)
 
 ## Requirements
 
@@ -43,17 +45,19 @@ rpcallowip=127.0.0.1
 ```
 
 Restart the node. That is all: stratnum asks for each algo's templates by
-passing `"algo": "equihash192"` (and `"equihash200"` when that port is on) on
-the main RPC port, default **7121**.
+passing `"algo": "equihash192"` (and `"equihash200"`, `"kawpow"`, `"x11"` for
+the ports you turn on) on the main RPC port, default **7121**.
 
 > **Pool on a different machine?** Add `rpcallowip=<pool-ip>` and
 > `rpcbind=0.0.0.0`, firewall the RPC port to that machine — or tunnel:
 > `ssh -L 7121:127.0.0.1:7121 node-host`.
 >
-> **`rpcalgoport` mappings** (e.g. `rpcalgoport=equihash192:7192`) bind to
-> loopback only and **override** the `algo` parameter, so a port mapped to
-> another algo gets its templates refused rather than mined. Only the main RPC
-> port serves both algos — use it.
+> **`rpcalgoport` mappings** (e.g. `rpcalgoport=kawpow:1929`) bind to
+> loopback only and **override** the `algo` parameter. To use one, give that
+> algo's block a `"nodePort"` (see below) — stratnum must then run on the
+> node's machine (`node.host` `127.0.0.1`) or tunnel that port too. A port
+> mapped to a *different* algo gets its templates refused rather than mined.
+> Without `nodePort`, every algo uses the main RPC port, which serves them all.
 
 Sanity check on the node machine:
 
@@ -63,7 +67,9 @@ kerrigan-cli getblocktemplate '{"algo":"equihash192","capabilities":["coinbasetx
 
 Expect `"algo": "equihash192"`, `"personalization": "kerrigan"` and a
 `coinbasetxn` field. The same call with `"algo":"equihash200"` should show
-`"personalization": "ZcashPoW"` and `"equihash_n": 200`.
+`"personalization": "ZcashPoW"` and `"equihash_n": 200`; with `"kawpow"`, a
+`headerhash` and `seedhash`; with `"x11"`, just the plain Bitcoin-style
+fields.
 
 ## 2. Configure stratnum
 
@@ -91,11 +97,14 @@ cp config.example.json config.json
 | `pool.maxConnections` | Cap on simultaneous miner sockets. Rental marketplaces fan one order across many workers. |
 | `pool.jobRefreshSec` | Max job age before a refreshed one is pushed. Non-clean, so GPUs don't restart; mainly a miner-watchdog keepalive. |
 | `pool.retainJobs` | How many recent jobs stay valid for submission, so a share arriving just after a new job isn't lost. **Not** cleared when a block lands. |
-| `pool.equihash200` | Adds an **equihash 200/9** port — `{ "port": 3200 }` is enough. See "Both algos" below. |
+| `pool.equihash200` | Adds an **equihash 200/9** port — `{ "port": 3200 }` is enough. See "More algos" below. |
+| `pool.kawpow` | Adds a **KawPoW** port (default 3195) for GPUs. See "More algos" below. |
+| `pool.x11` | Adds an **X11** port (default 3197) for ASICs. See "More algos" below. |
+| `pool.<algo>.nodePort` | Optional, in any algo's block: the node RPC port that algo's templates come from — e.g. an `rpcalgoport` you set in kerrigan.conf. Left out, the algo uses `node.port`, which already serves every algo. Each distinct port gets its own RPC connection. |
 | `dashboard.enabled` / `host` / `port` | The web UI. `127.0.0.1` + an SSH tunnel is the safe default; exposing it reveals worker names, your rigs' IPs and your node's public IP (read-only, no payout address). |
 | `dashboard.historySamples` | Raw chart samples kept, one per 20 s — these drive the **1h** view, so keep it at 180 or more. The 24h and 7d views are kept separately as 5- and 30-minute averages. All are saved to `data/history.json`. 10–5000. |
 | `dashboard.theme` | `default`, `80s-neon`, `80s-sunset` or `80s-miami` — see Themes. Read at startup. |
-| `data.dir` | Where `state.json` (found blocks, counters) and `history.json` (chart) live, plus `*-equihash200.json` when 200/9 is on |
+| `data.dir` | Where `state.json` (found blocks, counters) and `history.json` (chart) live, plus `*-<algo>.json` for each other algo that is on, and `kawpow/` (KawPoW's epoch caches, ~20 MB each) |
 | `log.level` | `error` / `warn` / `info` / `debug`. `debug` also logs every non-clean job refresh. |
 | `notify.*` | Pushover notifications — see below. Absent or `enabled: false` = off. |
 
@@ -107,8 +116,8 @@ cp config.example.json config.json
 node server.js
 ```
 
-The test suite is offline and takes seconds; it replays a real mainnet block of
-each algo through the full pipeline:
+The test suite is offline and takes seconds; it replays real mainnet blocks
+through the full pipeline:
 
 ```bash
 npm test
@@ -160,6 +169,18 @@ A 192/7 solution sent to the 200/9 port — or the reverse — is rejected as
 `incorrect size of solution`, so a mis-pointed rig stands out in the reject
 histogram. `--user` is just the dashboard label; payouts always go to
 `pool.address`.
+
+**KawPoW** (GPUs), once that port is on. It is Ravencoin's KawPoW, so any
+KawPoW miner works — T-Rex, Rigel, SRBMiner-Multi, kawpowminer:
+
+```bash
+t-rex -a kawpow -o stratum+tcp://POOL_HOST:3195 -u rig1 -p x
+```
+
+**X11** (ASICs), once that port is on. In the miner's web UI: pool URL
+`stratum+tcp://POOL_HOST:3197`, any worker name, password `x`. Version rolling
+(AsicBoost) is declined when the miner asks, and every current X11 ASIC mines
+without it.
 
 ## 5. Dashboard
 
@@ -260,11 +281,12 @@ as free wins, and **solo variance is enormous** — a 2% and a 400% side by side
 is normal, and it only means something over dozens of blocks. A daemon-rejected
 submission never ends a round, so that work rolls into the next block.
 
-## Both algos — mining 200/9
+## More algos — 200/9, KawPoW, X11
 
-One process serves either or both algos. Each gets its own stratum port,
-template poller, vardiff and stats files; the node connection, health checks,
-ZMQ and notifications are shared. Add a block inside `pool` and restart:
+One process serves any or all of the four algos. Each gets its own stratum
+port, template poller, vardiff and stats files; health checks, ZMQ and
+notifications are shared, and so is the node connection unless an algo has its
+own `nodePort`. Add a block inside `pool` and restart:
 
 ```json
 "pool": {
@@ -282,10 +304,25 @@ ZMQ and notifications are shared. Add a block inside `pool` and restart:
 ```
 
 The top-level `port` / `startDiff` / `minDiff` / `maxDiff` remain the 192/7
-port's, so an existing config keeps meaning what it did. Only `port` is
-required in the block; `vardiff` timing is shared unless the block overrides
-it. `"enabled": false` switches an algo off — add
-`"equihash192": { "enabled": false }` to run 200/9 alone.
+port's, so an existing config keeps meaning what it did. Nothing in the block
+is required — `{}` turns an algo on with its defaults; `vardiff` timing is
+shared unless the block overrides it. `"enabled": false` switches an algo off —
+add `"equihash192": { "enabled": false }` to run without 192/7.
+
+KawPoW and X11 the same way — here each read from its own `rpcalgoport`
+(leave `nodePort` out to use `node.port`):
+
+```json
+"kawpow": { "port": 3195, "nodePort": 1929 },
+"x11":    { "port": 3197, "nodePort": 1930 }
+```
+
+| Algo | Default port | Rate | Default start / min / max diff | Miners |
+|---|---|---|---|---|
+| equihash 192/7 | 3192 | Sol/s | 8 / 0.5 / 100000 | GPUs (miniZ, GMiner) |
+| equihash 200/9 | 3200 | Sol/s | 1 / 0.05 / 100000 | GPUs (miniZ) |
+| KawPoW | 3195 | H/s | 0.25 / 0.005 / 1000 | GPUs (T-Rex, Rigel, SRBMiner, kawpowminer) |
+| X11 | 3197 | H/s | 1024 / 1 / 100000 | ASICs |
 
 **The difficulty numbers are on a different scale.** One diff-1 share is worth
 ~8192 solutions on 200/9 against ~24.7 on 192/7, so a rig settles at a much
@@ -296,8 +333,15 @@ take hours; vardiff finds the level either way.
 - **Alerts stay one set.** A rig is a name whichever port it is on, so moving
   one between algos is not an "offline" push. Block messages name the algo:
   `Block found — height 142,781 (200/9)`.
-- **Separate state.** 200/9 uses `data/state-equihash200.json` and
-  `history-equihash200.json`; 192/7 keeps its original file names.
+- **Separate state.** Each algo has its own `data/state-<algo>.json` and
+  `history-<algo>.json`; 192/7 keeps its original file names.
+- **The dashboard** gets a tab per algo, each in its own unit — Sol/s for
+  equihash, H/s (with k/M/G/T) for KawPoW and X11.
+- **KawPoW's first start takes a few seconds per epoch**: checking a share
+  needs that epoch's ~20 MB cache, built on a worker thread (rigs can connect
+  meanwhile) and saved under `data/kawpow/`, so later restarts load it in a
+  fraction of a second. The next epoch's is prepared ahead of the switch every
+  7500 blocks, and older ones are deleted.
 - **Compare the networks before moving hashrate.** Each algo gets about a
   quarter of the blocks, so what you win is your share of *that* algo's network
   — `kerrigan-cli getmininginfo` lists them under `networkhashps_per_algo`.
@@ -445,7 +489,10 @@ Discord to map it; your blocks carry the tag either way.
 | Every share `invalid solution` | Wrong personalization/params | `--pers=kerrigan` + 192,7 on the 192/7 port; `--pers=ZcashPoW` + 200,9 on the 200/9 port |
 | Every share `incorrect size of solution` | A 192/7 miner on the 200/9 port, or the reverse | Check which port each rig targets |
 | A rig dropped, log says `N invalid solutions in a row` | That miner isn't solving this port's algorithm at all; 20 in a row ends the connection instead of burning CPU | Fix its `--par` / `--pers`; it reconnects itself. Stray noise never triggers this |
-| Log: `bad template: … not equihash192` (or `200`) | The RPC port you target is `rpcalgoport`-mapped to another algo | Point `node.port` at the main RPC port |
+| A KawPoW rig or ASIC dropped, log says `N shares in a row below the share difficulty` | On KawPoW and X11 junk does not fail a check, it misses the target — so 20 misses in a row mean the same thing | Check it is pointed at the right port, with the right algo |
+| KawPoW: every share `mix hash does not match the nonce` | The rig is mining another coin's KawPoW, or a stale header | Point it at this port only; restart the miner |
+| X11: every share `version rolling is not supported` | The ASIC rolls the version (AsicBoost) despite being told no | Turn AsicBoost / version rolling off in its settings |
+| Log: `bad template: … not equihash192` (or another algo) | The RPC port that algo reads is `rpcalgoport`-mapped to a different algo | Fix that algo's `nodePort`, or drop it to use the main RPC port |
 | Log: `RPC authentication failed` | rpcuser/rpcpassword mismatch | Sync `node.user` / `node.pass` with kerrigan.conf |
 | Log: `daemon not ready: …` | Node still syncing / masternode sync | Wait; the pool recovers on its own |
 | Log: `Invalid pooladdress` | `pool.address` is not a valid KRGN address | Fix it in config.json |
@@ -464,11 +511,24 @@ Discord to map it; your blocks carry the tag either way.
   and a port of zcash's `IsValidSolution` parameterised over N/K. 200/9's
   20-bit collisions land mid-byte, so the test works in bits. ~1 ms per 192/7
   share, ~4 ms per 200/9 share.
-- **Serialization oracle**: the tests rebuild mainnet blocks 116370 (192/7) and
-  122284 (200/9) from synthetic templates and assert **byte-identical** output,
-  including through the real server process with both algos running. At
-  runtime every template's `header_hex` is checked against our own
-  serialization before any job is served.
+- **KawPoW is verified in full**: the mix hash is recomputed (ethash light
+  cache + ProgPoW 0.9.4, ported from Kerrigan's own `src/crypto/ethash`) on a
+  worker thread, ~20 ms a share, and must equal the one the miner sent. A share
+  whose claimed hash would not count anyway is turned away first, at the cost
+  of one keccak. Checked against all 13 upstream test vectors and two mainnet
+  blocks.
+- **X11 is Dash's pure-JS implementation**, vendored unmodified in `lib/x11/`
+  (MIT). ~1 ms a share; every Kerrigan block hash is X11, so the tests check
+  it against real blocks of all four algos.
+- **Serialization oracle**: the tests rebuild mainnet blocks 116370 (192/7),
+  122284 (200/9) and 122281 (KawPoW) from synthetic templates and assert
+  **byte-identical** output, including through the real server process with
+  several algos running. X11 blocks carry their pool's own extranonce, so X11
+  is checked field by field against real block 122283's header, and share by
+  share against an independently written miner. At runtime every template's
+  `header_hex` (or KawPoW `headerhash`) is checked against our own
+  serialization before any job is served, and every X11 job's merkle branch
+  against the full tree.
 - **Block safety**: the block-target check runs *before* the share-target check,
   block serialization uses the job's own snapshot, and found blocks are written
   to `state.json` with an fsync'd atomic write the moment they are accepted.
@@ -484,30 +544,34 @@ Discord to map it; your blocks carry the tag either way.
 - **Shares that never verify cost little.** A repeat is caught by its hash
   before the expensive check, only verified shares enter the per-job dedupe
   window (capped, oldest dropped first), and 20 consecutive invalid solutions
-  end the connection.
+  (or, on KawPoW and X11, misses) end the connection.
 - **The chart is sent only when it changes** — the page passes the sequence it
   holds as `?h=`, cutting the response by 88%. The longer ranges are running
   sums per time bucket, so they cost the same to store and send as the 1h view
   and carry on across a restart mid-bucket.
-- Block identity hashes are X11 for *all* algos here; stratnum never computes
-  them, confirming acceptance through the node and tracking the coinbase txid
-  to 100 confirmations.
+- Block identity hashes are X11 for *all* algos here; stratnum confirms
+  acceptance through the node and tracks the coinbase txid to 100
+  confirmations (on X11, the coinbase of the share that found the block).
 
 ## Files
 
 ```
 server.js            entry point
 config.example.json  copy to config.json
-lib/                 algos (what differs between 192/7 and 200/9), blake2b,
-                     equihash verify, job/serialization, coinbase tag, stratum,
-                     shares, vardiff, daemon RPC, zmq, stats, dashboard,
-                     notify (pushover transport) + alerts (which events, when)
+lib/                 algos (what differs between them), families/ (each
+                     proof-of-work's wire format and share check), blake2b,
+                     equihash verify, keccak + kawpow (+ its worker and epoch
+                     cache), x11/ (Dash's, vendored), job builders, coinbase
+                     tag/extranonce, stratum, shares, vardiff, daemon RPC, zmq,
+                     stats, dashboard, notify (pushover) + alerts
+lib/x11/LICENSE, lib/LICENSE-ethash   licenses of the two ported hash libraries
 web/index.html       self-contained dashboard (no external assets)
-test/                204 tests incl. full-system e2e runs against a mock daemon,
-                     with a real mainnet block per algo as the fixture oracle
+test/                240+ tests incl. full-system e2e runs against a mock daemon,
+                     with real mainnet blocks of every algo as fixture oracles
 data/state.json      found blocks + lifetime counters (auto-created; 192/7)
 data/history.json    hashrate chart samples, so the graph survives a restart
-data/*-equihash200.json  the same two files for 200/9, when it is on
+data/*-<algo>.json  the same two files for each other algo that is on
+data/kawpow/         KawPoW epoch caches (current ±1 epoch kept)
 ```
 
 Happy Hashing!

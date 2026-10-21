@@ -54,7 +54,7 @@ const tests = [
       assertEq(algos.get(null).key, 'equihash192');
       assertThrows(() => algos.get('equihash210'));
       assertThrows(() => algos.get('toString'), 'prototype names are not algos');
-      assertEq(algos.list().map(a => a.key), ['equihash192', 'equihash200']);
+      assertEq(algos.list().map(a => a.key), ['equihash192', 'equihash200', 'kawpow', 'x11']);
     },
   },
   {

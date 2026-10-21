@@ -327,10 +327,10 @@ footer { color: var(--muted); font-size: 12px; margin-top: 18px; display: flex; 
   <section class="card chart-card" id="hashrate-card">
     <h2>Difficulty &amp; hashrate
       <span class="ranges" id="ranges" role="group" aria-label="Chart range"><button type="button" data-range="1h">1h</button><button type="button" data-range="24h">24h</button><button type="button" data-range="7d">7d</button></span>
-      <span class="unit">separate scales — network difficulty on the left, pool Sol/s on the right</span>
+      <span class="unit">separate scales — network difficulty on the left, pool <span id="chart-unit">Sol/s</span> on the right</span>
       <span class="legend">
         <span class="key"><span class="swatch s2"></span>net difficulty</span>
-        <span class="key"><span class="swatch s1"></span>pool Sol/s</span>
+        <span class="key"><span class="swatch s1"></span>pool <span id="legend-unit">Sol/s</span></span>
       </span>
     </h2>
     <div class="spark-wrap" id="spark-wrap">
@@ -374,11 +374,30 @@ function fmtNum(v, places) {
   if (v === null || v === undefined || !isFinite(v)) return '—';
   return v.toLocaleString('en-US', { maximumFractionDigits: places === undefined ? 2 : places });
 }
+// A hashrate's number and SI prefix — an X11 ASIC reads in TH/s, an equihash
+// rig in Sol/s with no prefix at all. Below a million it reads exactly as it
+// always has.
+function siParts(v) {
+  for (const [div, p] of [[1e15, 'P'], [1e12, 'T'], [1e9, 'G'], [1e6, 'M']]) {
+    if (v >= div) return [fmtNum(v / div, 2), p];
+  }
+  if (v >= 10000) return [fmtNum(v / 1000, 1), 'k'];
+  return [fmtNum(v, v >= 100 ? 0 : 2), ''];
+}
+// The number alone, prefix attached: table cells, chart ticks.
 function fmtSols(v) {
   if (v === null || v === undefined) return '—';
-  if (v >= 10000) return fmtNum(v / 1000, 1) + 'k';
-  return fmtNum(v, v >= 100 ? 0 : 2);
+  const [n, p] = siParts(v);
+  return n + p;
 }
+// With its unit, the prefix on the unit as miners print it: "293.2 GH/s".
+function fmtRate(v, u) {
+  if (v === null || v === undefined) return '—';
+  const [n, p] = siParts(v);
+  return n + ' ' + p + (u || unit);
+}
+// The unit of the algo on screen; set from each snapshot.
+let unit = 'Sol/s';
 function fmtDur(sec) {
   if (sec === null || sec === undefined || !isFinite(sec)) return '—';
   if (sec < 90) return Math.round(sec) + 's';
@@ -449,6 +468,15 @@ function effortSub(s) {
 // `suffix` rides alongside the big number in smaller muted type — for when a
 // value needs a word to be unambiguous ("105% avg") without stealing the
 // subtitle line.
+function hashrateTile(s) {
+  const v = s.pool.sols5m;
+  const [n, p] = v === null || v === undefined ? ['—', ''] : siParts(v);
+  const h = s.pool.sols1h;
+  const avg = h === null || h === undefined ? '—'
+    : siParts(h)[1] === p ? siParts(h)[0] : fmtRate(h);
+  return tile('Pool hashrate', n, s.warmingUp ? p + unit + ' · warming up…' : p + unit + ' · 1h avg ' + avg);
+}
+
 function tile(label, value, sub, suffix) {
   const t = el('div', 'tile');
   t.appendChild(el('div', 'label', label));
@@ -900,10 +928,10 @@ const MAIN_CHART = {
     {
       valueOf: solsOf, color: '--series', scale: 'zero', side: 'right',
       fill: '--series-fill', key: 'pool', swatch: 's1',
-      fmt: v => fmtSols(v) + ' Sol/s', tickFmt: v => fmtSols(v),
+      fmt: v => fmtRate(v), tickFmt: v => fmtSols(v),
     },
   ],
-  extraRow: p => (netSolsOf(p) === null ? 'no template' : '≈ ' + fmtSols(netSolsOf(p)) + ' Sol/s network'),
+  extraRow: p => (netSolsOf(p) === null ? 'no template' : '≈ ' + fmtRate(netSolsOf(p)) + ' network'),
 };
 
 wireHover(MAIN_CHART);
@@ -922,6 +950,10 @@ function render(s) {
   $('sub').textContent = 'Kerrigan · ' + (s.algo ? s.algo.label : 'equihash 192/7') + ' · solo';
   renderAlgoTabs(s);
   renderTally(s);
+  // Every rate on the page is in the unit of the algo on screen.
+  unit = (s.algo && s.algo.unit) || 'Sol/s';
+  $('chart-unit').textContent = unit;
+  $('legend-unit').textContent = unit;
 
   // Only shown when something is actively costing records. `statePersisting`
   // is absent on older servers, so treat undefined as fine rather than broken.
@@ -948,15 +980,16 @@ function render(s) {
     notifyTile(s),
     tile('Next block height', fmtNum(s.pool.nextHeight, 0), 'miner reward ' + fmtKRGN(s.pool.minerRewardKRGN)),
 
-    tile('Network difficulty', fmtNum(s.network.difficulty, 0), 'net ≈ ' + fmtSols(s.network.solsEstimate) + ' Sol/s'),
+    tile('Network difficulty', fmtNum(s.network.difficulty, 0), 'net ≈ ' + fmtRate(s.network.solsEstimate)),
     tile('Est. time to block', fmtDur(s.pool.timeToBlockSec), ''),
     effortTile(s),
     tile('Avg effort', fmtEffort(s.pool.effortPct), effortSub(s)),
 
     // Unit lives in the subtitle, not the big number — "985 Sol/s" wraps
-    // narrow and reads badly broken across two lines.
-    tile('Pool hashrate', fmtSols(s.pool.sols5m),
-      s.warmingUp ? 'Sol/s · warming up…' : 'Sol/s · 1h avg ' + fmtSols(s.pool.sols1h)),
+    // narrow and reads badly broken across two lines. Its SI prefix goes with
+    // it ("293.2" over "GH/s"), and the 1h figure only repeats the unit when
+    // its prefix differs.
+    hashrateTile(s),
     tile('Blocks found', String(s.totals.blocksFound),
       s.totals.acceptedShares.toLocaleString() + ' shares accepted'),
     tile('Miners', String(s.pool.minersConnected), 'stratum port ' + s.pool.stratumPort),
@@ -969,7 +1002,7 @@ function render(s) {
 
   renderTable($('workers-holder'),
     [{ label: 'Worker' }, { label: 'IP' }, { label: 'Diff', num: true },
-     { label: 'Sol/s (5m)', num: true }, { label: 'Shares/min', num: true },
+     { label: unit + ' (5m)', num: true }, { label: 'Shares/min', num: true },
      { label: 'Accepted', num: true }, { label: 'Rejected', num: true },
      { label: 'Best share', num: true }, { label: 'Last share', num: true }],
     s.workers ? s.workers.map(w => ([
@@ -1111,7 +1144,7 @@ function renderAlgoTabs(s) {
     const t = algoTabs.get(a.key);
     t.b.setAttribute('aria-pressed', String(!!s.algo && a.key === s.algo.key));
     t.meta.textContent = fmtNum(a.miners, 0) + (a.miners === 1 ? ' miner' : ' miners') +
-      ' · ' + fmtSols(a.sols5m) + ' Sol/s · port ' + a.port;
+      ' · ' + fmtRate(a.sols5m, a.unit || 'Sol/s') + ' · port ' + a.port;
   }
 }
 

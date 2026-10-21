@@ -31,6 +31,20 @@
       "startDiff": 1,
       "minDiff": 0.05,
       "maxDiff": 100000
+    },
+    "kawpow": {
+      "enabled": false,
+      "port": 3195,
+      "startDiff": 0.25,
+      "minDiff": 0.005,
+      "maxDiff": 1000
+    },
+    "x11": {
+      "enabled": false,
+      "port": 3197,
+      "startDiff": 1024,
+      "minDiff": 1,
+      "maxDiff": 100000
     }
   },
   "dashboard": {

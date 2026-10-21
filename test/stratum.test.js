@@ -349,6 +349,89 @@ const tests = [
       }
     },
   },
+  {
+    name: 'extraNonce1 width follows the family: 4 bytes as always, 2 bytes all counter',
+    fn() {
+      const { ExtraNonceCounter } = require('../lib/stratum');
+      delete process.env.STRATNUM_FORCE_EN1;
+      const four = new ExtraNonceCounter('equihash192', 4);
+      assert(/^[0-9a-f]{8}$/.test(four.next()), '4 bytes = 8 hex');
+      const two = new ExtraNonceCounter('kawpow', 2);
+      const seen = new Set();
+      for (let i = 0; i < 1000; i++) {
+        const v = two.next();
+        assert(/^[0-9a-f]{4}$/.test(v), '2 bytes = 4 hex: ' + v);
+        seen.add(v);
+      }
+      assertEq(seen.size, 1000, 'consecutive connections never share a prefix');
+    },
+  },
+  {
+    name: 'a KawPoW port speaks the Ravencoin dialect: subscribe, set_target, 7-field notify',
+    async fn() {
+      delete process.env.STRATNUM_FORCE_EN1;
+      require('../lib/families').get('kawpow').configure({
+        cacheDir: require('path').join(require('os').tmpdir(), 'stratnum-kawpow-cache'), prune: false,
+      });
+      const { stratum, port } = await startPool({ algo: algos.get('kawpow'), startDiff: 0.25 });
+      const m = new FakeMiner(port);
+      try {
+        stratum.setTemplate(fixtures.gbtFromRealBlock({}, 'kawpow'), true);
+        await m.connect();
+        const sub = await m.request('mining.subscribe', ['T-Rex/0.26']);
+        assertEq(sub.result[0][0], 'mining.notify');
+        assert(/^[0-9a-f]{4}$/.test(sub.result[1]), '2-byte extranonce1: ' + sub.result[1]);
+        await m.request('mining.authorize', ['rig', 'x']);
+        const t = await m.nextNotification('mining.set_target');
+        const n = await m.nextNotification('mining.notify');
+        assertEq(t.params[0], util.bigIntToHex64(util.diffToTarget(0.25, util.DIFF1_KAWPOW)), 'target on the KawPoW scale');
+        const blk = fixtures.parseRealBlock('kawpow');
+        assertEq(n.params.length, 7);
+        assertEq(n.params[1], blk.headerHash.toString('hex'), 'header hash');
+        assertEq(n.params[2], require('../lib/kawpow').epochSeed(16).toString('hex'), 'seed hash');
+        assertEq(n.params[3], t.params[0], 'the share target rides in the notify too');
+        assertEq([n.params[4], n.params[5]], [true, 122281], 'clean, height');
+        assertEq(n.params[6], util.reverseHex(blk.fields.bitsBuf.toString('hex')), 'bits');
+      } finally {
+        m.close();
+        await stratum.close();
+      }
+    },
+  },
+  {
+    name: 'an X11 port speaks classic stratum: 3-part subscribe, set_difficulty, 9-field notify; mining.configure is declined',
+    async fn() {
+      delete process.env.STRATNUM_FORCE_EN1;
+      const { stratum, port } = await startPool({ algo: algos.get('x11'), startDiff: 1024 });
+      const m = new FakeMiner(port);
+      try {
+        stratum.setTemplate(fixtures.gbtFromRealBlock({}, 'x11'), true);
+        await m.connect();
+        // ASIC firmware asks for version rolling before it subscribes.
+        const conf = await m.request('mining.configure', [['version-rolling', 'minimum-difficulty'],
+          { 'version-rolling.mask': '1fffe000', 'version-rolling.min-bit-count': 2 }]);
+        assertEq(conf.error, null);
+        assertEq(conf.result, { 'version-rolling': false, 'minimum-difficulty': false });
+        const sub = await m.request('mining.subscribe', ['bmminer/2.0.0']);
+        assertEq(sub.result[0].map(x => x[0]), ['mining.set_difficulty', 'mining.notify']);
+        assert(/^[0-9a-f]{8}$/.test(sub.result[1]), '4-byte extranonce1: ' + sub.result[1]);
+        assertEq(sub.result[2], 4, 'extranonce2 size');
+        await m.request('mining.authorize', ['rig', 'x']);
+        const first = await m.nextNotification();
+        assertEq([first.method, first.params], ['mining.set_difficulty', [1024]], 'difficulty first, as a number');
+        const n = await m.nextNotification('mining.notify');
+        assertEq(n.params.length, 9);
+        const blk = fixtures.parseRealBlock('x11');
+        assertEq(n.params[1].match(/.{8}/g).reverse().join(''), util.reverseHex(blk.fields.prevHash.toString('hex')),
+          'prevhash, word-swapped');
+        assertEq([n.params[5], n.params[6], n.params[8]], ['20000000', '1a55b93c', true]);
+        assert(n.params[2].endsWith('08') && n.params[3].length > 100, 'coinb1 ends at the 8-byte extranonce push');
+      } finally {
+        m.close();
+        await stratum.close();
+      }
+    },
+  },
 ];
 
 module.exports = { tests };

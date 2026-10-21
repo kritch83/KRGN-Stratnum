@@ -21,6 +21,7 @@ const { Stats } = require('./lib/stats');
 const zmqLib = require('./lib/zmq');
 const util = require('./lib/util');
 const { createDashboard, THEMES } = require('./lib/dashboard');
+const families = require('./lib/families');
 
 const DEFAULTS = {
   node: { host: '127.0.0.1', port: 7121, user: '', pass: '', pollMs: 1000, zmqBlock: '', confPath: '' },
@@ -89,6 +90,10 @@ function resolvePorts(pool, rawPool, errors) {
       minDiff: val('minDiff'),
       maxDiff: val('maxDiff'),
       vardiff: Object.assign({}, pool.vardiff, b.vardiff || {}),
+      // The node RPC port this algo's templates come from. Unset means the
+      // main one (node.port), which serves every algo through its `algo`
+      // parameter; set it to an `rpcalgoport` to give the algo its own.
+      nodePort: b.nodePort,
     });
   }
   return ports;
@@ -144,6 +149,11 @@ function resolveConfig(raw, configPath) {
   cfg.ports = resolvePorts(cfg.pool, rawPool, errors);
   const portOwner = new Map();   // stratum port -> algo key
   for (const p of cfg.ports) {
+    if (p.nodePort === undefined || p.nodePort === null) {
+      p.nodePort = cfg.node.port;
+    } else if (!isPort(p.nodePort)) {
+      errors.push(`${p.where}.nodePort must be 1..65535 — an rpcalgoport from kerrigan.conf, or leave it out for node.port`);
+    }
     if (!isPort(p.port)) {
       errors.push(`${p.where}.port must be 1..65535`);
     } else if (portOwner.has(p.port)) {
@@ -257,7 +267,15 @@ async function main() {
 
   log.info(`stratnum starting (pid ${process.pid}, node ${process.version})`);
 
-  const rpc = rpcLib.createClient(cfg.node);
+  // One RPC connection per node port in use: the main one, plus one for each
+  // algo given its own `nodePort`. Separate connections also keep one algo's
+  // slow getblocktemplate from queueing the others behind it.
+  const rpcClients = new Map();
+  const rpcFor = port => {
+    if (!rpcClients.has(port)) rpcClients.set(port, rpcLib.createClient(Object.assign({}, cfg.node, { port })));
+    return rpcClients.get(port);
+  };
+  const rpc = rpcFor(cfg.node.port);
   // Log tags only gain an algo when there are two to tell apart, so a
   // single-algo pool logs exactly as it always has.
   const multi = cfg.ports.length > 1;
@@ -266,11 +284,24 @@ async function main() {
   // externalip in getnetworkinfo.localaddresses on its own.
   const externalIp = externalIpFromConf(cfg.node.confPath, logLib.make('daemon'));
 
+  // KawPoW verifies shares against an epoch cache that takes seconds to
+  // build, so it is kept on disk beside the pool's state and survives a
+  // restart. (STRATNUM_KAWPOW_CACHE_DIR overrides where — the tests share one.)
+  if (cfg.ports.some(p => p.algo.family === 'kawpow')) {
+    const shared = process.env.STRATNUM_KAWPOW_CACHE_DIR;
+    families.get('kawpow').configure({
+      cacheDir: shared || path.join(cfg.data.dir, 'kawpow'),
+      // A shared directory is not this pool's to tidy.
+      prune: !shared,
+      log: logLib.make('kawpow'),
+    });
+  }
+
   // One pipeline per algo: its own template poller, vardiff, stratum port,
   // share processor and stats files. Everything about the NODE is shared.
   const pipelines = cfg.ports.map((p, i) => {
     const { algo } = p;
-    const daemon = new Daemon(rpc, {
+    const daemon = new Daemon(rpcFor(p.nodePort), {
       algo,
       address: cfg.pool.address,
       pollMs: cfg.node.pollMs,
@@ -312,7 +343,7 @@ async function main() {
     daemon.on('template', (tpl, clean) => stratum.setTemplate(tpl, clean));
 
     return {
-      algo, port: p.port, startDiff: p.startDiff, minDiff: p.minDiff, maxDiff: p.maxDiff,
+      algo, port: p.port, nodePort: p.nodePort, startDiff: p.startDiff, minDiff: p.minDiff, maxDiff: p.maxDiff,
       daemon, stratum, shares, stats,
     };
   });
@@ -360,7 +391,8 @@ async function main() {
   for (const p of pipelines) {
     try {
       await p.stratum.listen();
-      log.info(`stratum listening on ${hostPort(cfg.pool.bind, p.port)} for ${p.algo.label} ` +
+      const via = p.nodePort !== cfg.node.port ? `, templates from node port ${p.nodePort}` : '';
+      log.info(`stratum listening on ${hostPort(cfg.pool.bind, p.port)} for ${p.algo.label}${via} ` +
         `(start diff ${p.startDiff}, vardiff ${p.minDiff}..${p.maxDiff})`);
     } catch (err) {
       log.error(`cannot bind stratum port ${hostPort(cfg.pool.bind, p.port)} for ${p.algo.label}: ${err.message}`);
@@ -440,7 +472,7 @@ async function main() {
     for (const p of pipelines) {
       try { await p.stratum.close(); } catch { /* closing anyway */ }
     }
-    rpc.destroy();
+    for (const client of rpcClients.values()) client.destroy();
     process.exit(code);
   }
   process.on('SIGINT', () => shutdown(0));

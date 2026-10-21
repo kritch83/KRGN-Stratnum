@@ -12,6 +12,13 @@ const { ShareProcessor } = require('../lib/shares');
 const { VarDiff } = require('../lib/vardiff');
 const { FakeMiner } = require('./fake-miner');
 const fixtures = require('./fixtures');
+const families = require('../lib/families');
+
+// KawPoW verifies against an epoch cache; share the one kawpow.test.js keeps,
+// and never prune it.
+families.get('kawpow').configure({
+  cacheDir: require('path').join(require('os').tmpdir(), 'stratnum-kawpow-cache'), prune: false,
+});
 
 logLib.setLevel('error');
 const log = logLib.make('test-shares');
@@ -38,11 +45,16 @@ function stubDaemon() {
   };
 }
 
+// X11 has no real share to replay (see x11.test.js), so its extraNonce1 is
+// simply pinned to a known value.
+const X11_EN1 = 'aabbccdd';
+
 // Boots a pool with the real-block template, connects a fake miner through
 // the real TCP path, and returns everything needed to submit shares.
 // algoKey picks the algo and its real block (default 192/7).
 async function poolWithRealJob(tplOverrides, poolOpts, vdOpts, algoKey) {
-  process.env.STRATNUM_FORCE_EN1 = realSubmit(algoKey).en1;
+  const classic = algoKey === 'x11';
+  process.env.STRATNUM_FORCE_EN1 = classic ? X11_EN1 : realSubmit(algoKey).en1;
   const vardiff = new VarDiff(Object.assign({
     targetTime: 15, retargetTime: 90, variancePercent: 30, minDiff: 0.0001, maxDiff: 1e7,
   }, vdOpts || {}));
@@ -58,7 +70,7 @@ async function poolWithRealJob(tplOverrides, poolOpts, vdOpts, algoKey) {
   await m.connect();
   await m.request('mining.subscribe', ['fake-miner/1']);
   await m.request('mining.authorize', ['KAddr.rig', 'x']);
-  const target = await m.nextNotification('mining.set_target');
+  const target = await m.nextNotification(classic ? 'mining.set_difficulty' : 'mining.set_target');
   const notify = await m.nextNotification('mining.notify');
   const accepted = [];
   const rejected = [];
@@ -72,7 +84,7 @@ async function poolWithRealJob(tplOverrides, poolOpts, vdOpts, algoKey) {
     await stratum.close();
   };
   return {
-    stratum, shares, daemon, m, jobId: notify.params[0], targetHex: target.params[0],
+    stratum, shares, daemon, m, jobId: notify.params[0], targetHex: target.params[0], notify: notify.params,
     accepted, rejected, blocks, cleanup,
   };
 }
@@ -485,6 +497,202 @@ const tests = [
       try {
         assertEq(p.targetHex, util.bigIntToHex64(util.diffToTarget(2, util.DIFF1_200)));
         assert(p.targetHex !== util.bigIntToHex64(util.diffToTarget(2)), 'not the 192/7 scale');
+      } finally {
+        await p.cleanup();
+      }
+    },
+  },
+  {
+    name: 'KawPoW: the real share replays into a submitblock byte-identical to the on-chain block',
+    async fn() {
+      const r = realSubmit('kawpow');
+      const p = await poolWithRealJob({}, {}, {}, 'kawpow');
+      try {
+        const resp = await p.m.request('mining.submit', ['w', p.jobId, '0x' + r.nonceHex, '0x' + r.headerHashHex, '0x' + r.mixHex]);
+        assertEq(resp.error, null, 'accepted: ' + JSON.stringify(resp.error));
+        assertEq(p.daemon.submits.length, 1);
+        assertEq(p.daemon.submits[0], r.rawHex, 'byte-identical to block 122281');
+        assertEq(p.blocks[0].cbTxid, r.cbTxid);
+        assertEq(p.blocks[0].height, 122281);
+        // Difficulty on the KawPoW scale (Ravencoin's diff1), not equihash's.
+        const blk = fixtures.parseRealBlock('kawpow');
+        const target = util.compactToTarget(util.reverseHex(blk.fields.bitsBuf.toString('hex')));
+        assertClose(p.blocks[0].netDiff, util.targetToDiff(target, util.DIFF1_KAWPOW), 1e-6);
+      } finally {
+        await p.cleanup();
+      }
+    },
+  },
+  {
+    name: 'KawPoW: a forged mix that claims to count is fully checked — and rejected as an invalid solution',
+    async fn() {
+      const r = realSubmit('kawpow');
+      const p = await poolWithRealJob({ target: util.bigIntToHex64(1n) }, {}, {}, 'kawpow');
+      try {
+        // A share target so loose that any final hash "counts": the claimed
+        // mix must then be proven, and a forged one fails.
+        [...p.stratum.sessions][0].shareTarget = util.MAX256;
+        const forged = r.mixHex.slice(0, 63) + (r.mixHex[63] === '0' ? '1' : '0');
+        const resp = await p.m.request('mining.submit', ['w', p.jobId, '0x' + r.nonceHex, '0x' + r.headerHashHex, '0x' + forged]);
+        assertEq(resp.error[1], 'invalid solution');
+        assertEq(p.daemon.submits.length, 0);
+      } finally {
+        await p.cleanup();
+      }
+    },
+  },
+  {
+    name: 'KawPoW: junk that could not count anyway is turned away as low difficulty, never fully computed',
+    async fn() {
+      const r = realSubmit('kawpow');
+      const p = await poolWithRealJob({ target: util.bigIntToHex64(1n) }, { startDiff: 1 }, {}, 'kawpow');
+      const verifier = families.get('kawpow')._getVerifier();
+      const realHash = verifier.hash.bind(verifier);
+      let calls = 0;
+      verifier.hash = (...a) => { calls++; return realHash(...a); };
+      try {
+        const forged = 'ab'.repeat(32);
+        const resp = await p.m.request('mining.submit', ['w', p.jobId, '0x' + r.nonceHex, '0x' + r.headerHashHex, '0x' + forged]);
+        assertEq(resp.error[0], 23, 'low difficulty');
+        assertEq(calls, 0, 'the worker was never asked');
+      } finally {
+        verifier.hash = realHash;
+        await p.cleanup();
+      }
+    },
+  },
+  {
+    name: 'KawPoW: wrong header hash, a nonce outside the extranonce range and bad sizes are refused',
+    async fn() {
+      const r = realSubmit('kawpow');
+      const p = await poolWithRealJob({}, {}, {}, 'kawpow');
+      try {
+        const cases = [
+          [['w', p.jobId, '0x' + r.nonceHex, '0x' + 'ab'.repeat(32), '0x' + r.mixHex], 'header hash does not match the job'],
+          [['w', p.jobId, '0x' + 'ffff' + r.nonceHex.slice(4), '0x' + r.headerHashHex, '0x' + r.mixHex], 'nonce outside your extranonce range'],
+          [['w', p.jobId, '0x' + r.nonceHex.slice(2), '0x' + r.headerHashHex, '0x' + r.mixHex], 'incorrect size of nonce'],
+          [['w', p.jobId, '0x' + r.nonceHex, '0x' + r.headerHashHex, '0x' + r.mixHex.slice(2)], 'incorrect size of mix hash'],
+        ];
+        for (const [params, reason] of cases) {
+          const resp = await p.m.request('mining.submit', params);
+          assertEq(resp.error[1], reason);
+        }
+        assertEq(p.daemon.submits.length, 0);
+      } finally {
+        await p.cleanup();
+      }
+    },
+  },
+  {
+    name: 'KawPoW: the same nonce twice in ONE packet is booked once — the pending set closes the race',
+    async fn() {
+      const r = realSubmit('kawpow');
+      const p = await poolWithRealJob({}, {}, {}, 'kawpow');
+      try {
+        // Verification is asynchronous here, so without `pending` both copies
+        // would pass the duplicate check before either finished.
+        const line = id => JSON.stringify({ id, method: 'mining.submit',
+          params: ['w', p.jobId, '0x' + r.nonceHex, '0x' + r.headerHashHex, '0x' + r.mixHex] });
+        const a = new Promise(res => p.m.pending.set(901, res));
+        const b = new Promise(res => p.m.pending.set(902, res));
+        p.m.sendRaw(line(901) + '\n' + line(902) + '\n');
+        const [ra, rb] = await Promise.all([a, b]);
+        assertEq(ra.result, true);
+        assertEq(rb.error && rb.error[0], 22, 'second copy is a duplicate');
+        assertEq(p.accepted.length, 1, 'booked once');
+        assertEq(p.daemon.submits.length, 1, 'one block submission');
+      } finally {
+        await p.cleanup();
+      }
+    },
+  },
+  {
+    name: 'KawPoW: junk misses rather than fails, so twenty misses in a row drop the connection; a good share clears them',
+    async fn() {
+      const r = realSubmit('kawpow');
+      const p = await poolWithRealJob({ target: util.bigIntToHex64(1n) }, { startDiff: 1 }, {}, 'kawpow');
+      try {
+        const session = [...p.stratum.sessions][0];
+        // Distinct nonces inside the miner's range, each with a made-up mix.
+        const junk = i => ['w', p.jobId, '0x' + r.nonceHex.slice(0, 4) + i.toString(16).padStart(12, '0'),
+          '0x' + r.headerHashHex, '0x' + 'cd'.repeat(32)];
+        for (let i = 0; i < 19; i++) assertEq((await p.m.request('mining.submit', junk(i))).error[0], 23);
+        assertEq(session.invalidStreak, 19, 'misses count');
+        session.shareTarget = util.MAX256;   // the real share now counts
+        assertEq((await p.m.request('mining.submit', ['w', p.jobId, '0x' + r.nonceHex, '0x' + r.headerHashHex, '0x' + r.mixHex])).result, true);
+        assertEq(session.invalidStreak, 0, 'an accepted share clears them');
+        session.shareTarget = util.diffToTarget(1, util.DIFF1_KAWPOW);
+        session.prevShareTarget = null;
+        for (let i = 100; i < 119; i++) await p.m.request('mining.submit', junk(i));
+        assertEq(p.m.closed, false, '19, a good share, 19 more: not a run of 20');
+        const last = await p.m.request('mining.submit', junk(500));
+        assertEq(last.error[0], 23, 'the twentieth is still answered');
+        assert(await p.m.waitClose(2000), 'and then the connection goes');
+      } finally {
+        await p.cleanup();
+      }
+    },
+  },
+  {
+    name: 'X11: a share is rebuilt from the miner\'s own fields into the very block the miner assembled',
+    async fn() {
+      const p = await poolWithRealJob({ target: 'f'.repeat(64) }, {}, {}, 'x11');
+      try {
+        assertEq(p.notify.length, 9, 'classic notify');
+        const tpl = fixtures.gbtFromRealBlock({}, 'x11');
+        const ntime = tpl.curtime.toString(16).padStart(8, '0');
+        const m = fixtures.x11MinerAssemble(p.notify, X11_EN1, '0000002a', ntime, '01020304');
+        const resp = await p.m.request('mining.submit', ['KAddr.rig', p.jobId, '0000002a', ntime, '01020304']);
+        assertEq(resp.error, null, 'accepted: ' + JSON.stringify(resp.error));
+        assertEq(p.daemon.submits, [m.block.toString('hex')], 'submitblock byte-identical to the miner\'s block');
+        assertEq(p.blocks[0].cbTxid, m.cbTxid, 'this share\'s own coinbase txid');
+        assertEq(p.blocks[0].height, 122283);
+        assertEq(p.accepted[0].shareDiff,
+          Number((util.DIFF1_X11 * 1000n) / util.bufToBigIntLE(require('../lib/x11').x11(m.header))) / 1000,
+          'booked on the X11 of that header, on the Bitcoin diff-1 scale');
+        // Another extranonce2 is another coinbase, so another block.
+        await p.m.request('mining.submit', ['KAddr.rig', p.jobId, '0000002b', ntime, '01020304']);
+        assertEq(p.daemon.submits[1], fixtures.x11MinerAssemble(p.notify, X11_EN1, '0000002b', ntime, '01020304').block.toString('hex'));
+      } finally {
+        await p.cleanup();
+      }
+    },
+  },
+  {
+    name: 'X11: misses are low difficulty, and twenty in a row drop the connection',
+    async fn() {
+      const p = await poolWithRealJob({ target: util.bigIntToHex64(1n) }, { startDiff: 1e6 }, {}, 'x11');
+      try {
+        const ntime = p.notify[7];
+        let last = null;
+        for (let i = 0; i < 20; i++) last = await p.m.request('mining.submit', ['w', p.jobId, '00000000', ntime, i.toString(16).padStart(8, '0')]);
+        assertEq(last.error[0], 23, 'the last one is still answered');
+        assert(await p.m.waitClose(2000), 'and then the connection goes');
+        assertEq(p.rejected.filter(e => e.code === 23).length, 20);
+      } finally {
+        await p.cleanup();
+      }
+    },
+  },
+  {
+    name: 'X11: version rolling, bad sizes, an out-of-range ntime and a duplicate are refused',
+    async fn() {
+      const p = await poolWithRealJob({ target: 'f'.repeat(64) }, {}, {}, 'x11');
+      try {
+        const ntime = p.notify[7];
+        const early = (parseInt(ntime, 16) - 1).toString(16).padStart(8, '0');
+        const cases = [
+          [['w', p.jobId, '00000000', ntime, '00000001', '1fffe000'], 'version rolling is not supported'],
+          [['w', p.jobId, '000000', ntime, '00000001'], 'incorrect size of extranonce2'],
+          [['w', p.jobId, '00000000', ntime.slice(1), '00000001'], 'incorrect size of ntime'],
+          [['w', p.jobId, '00000000', ntime, '0000000001'], 'incorrect size of nonce'],
+          [['w', p.jobId, '00000000', early, '00000001'], 'ntime out of range'],
+        ];
+        for (const [params, reason] of cases) assertEq((await p.m.request('mining.submit', params)).error[1], reason);
+        assertEq((await p.m.request('mining.submit', ['w', p.jobId, '00000000', ntime, '00000001'])).result, true);
+        const dup = await p.m.request('mining.submit', ['w', p.jobId, '00000000', ntime.toUpperCase(), '00000001']);
+        assertEq(dup.error[0], 22, 'the same share again, even in uppercase');
+        assertEq(p.daemon.submits.length, 1);
       } finally {
         await p.cleanup();
       }
