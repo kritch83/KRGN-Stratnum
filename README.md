@@ -263,8 +263,9 @@ never counts against the verdict. Hover a pip for detail.
 
 **Effort = actual work ÷ expected work.** 100% means a block cost exactly what
 the odds implied, and **lower is better**. *Avg effort* is the mean across
-finished blocks; *This block* is the round in progress, counting up from 0, so
-past 100% simply means this one is running long.
+the last 300 finished blocks (the most each algo keeps on record); *This block*
+is the round in progress, counting up from 0, so past 100% simply means this
+one is running long.
 
 Finding a block is expected to take `netDiff` difficulty-1 shares, so each
 share is weighted as it arrives: a share worth `d` at network difficulty `D`

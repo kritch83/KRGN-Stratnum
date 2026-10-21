@@ -304,6 +304,37 @@ const tests = [
     },
   },
   {
+    name: 'average effort covers the last 300 blocks — the most kept on record — and they survive a restart',
+    fn() {
+      const dir = tmpDir();
+      const nowRef = { t: 1_000_000_000_000 };
+      const stats = makeStats(dir, nowRef);
+      // A round of `shares` diff-10 shares at network difficulty 1000 costs
+      // shares / 100 of a block.
+      const round = (height, shares) => {
+        for (let i = 0; i < shares; i++) stats.recordShare({ worker: 'w', bookedDiff: 10, shareDiff: 10, netDiff: 1000 });
+        stats.registerBlock({ height, cbTxid: 'cb' + height, worker: 'w', foundAt: nowRef.t, rewardSat: 5e8,
+          shareDiff: 1, netDiff: 1000, accepted: true, submitResult: null });
+      };
+      // 20 old 400% blocks, then 300 at 50%: only the newest 300 may count.
+      // Each found block is an fsync'd save; 320 of them would take seconds,
+      // so saving waits for stop() below, which writes them all at once.
+      stats.save = () => {};
+      for (let h = 1; h <= 20; h++) round(h, 400);
+      for (let h = 21; h <= 320; h++) round(h, 50);
+      delete stats.save;
+      assertEq(stats.blocks.length, 300);
+      assertEq([stats.blocks[0].height, stats.blocks[299].height], [320, 21], 'newest first, oldest dropped');
+      const avg = stats.avgEffort();
+      assertEq(avg.blocks, 300);
+      assertClose(avg.effort, 0.5, 1e-9, 'the 400% blocks have aged out');
+      stats.stop();
+      const s2 = makeStats(dir, nowRef);
+      assertEq(s2.blocks.length, 300, 'all 300 are saved');
+      assertEq(s2.avgEffort().blocks, 300);
+    },
+  },
+  {
     // How a real block record was lost: an unreadable state file was treated
     // as "first run", and the next save overwrote it with empty counters.
     name: 'state that cannot be read is left alone rather than overwritten',
