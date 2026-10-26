@@ -23,6 +23,15 @@ async function createMockDaemon(overrides) {
     blockhashes: {},          // height -> hash
     blocks: {},               // hash -> verbose getblock result
     addressValid: true,
+    // validateaddress's scriptPubKey; by default whatever the template pays,
+    // as on the real node, where the template pays the address it was given.
+    addressScript: undefined,
+    // What the node pays when a template request names no pooladdress (its
+    // -mineraddress): undefined = the same as the template, i.e. it matches;
+    // '51' = none set (OP_TRUE); any other script = another address.
+    mineraddressScript: undefined,
+    // decodescript answers: { scriptHex: address }.
+    scriptAddresses: {},
     // Health-poll answers. State-driven so a test can drive the zero-peer and
     // behind-the-tip cases; set any of these to null to make that one RPC fail
     // while the others keep answering.
@@ -61,8 +70,12 @@ async function createMockDaemon(overrides) {
           case 'getblocktemplate': {
             if (state.warmupError) return reply(null, state.warmupError);
             const want = params[0] && params[0].algo;
-            if (state.templates && want && state.templates[want]) return reply(state.templates[want]);
-            return reply(state.template);
+            const tpl = state.templates && want && state.templates[want] ? state.templates[want] : state.template;
+            if (state.mineraddressScript !== undefined && !(params[0] && params[0].pooladdress) && tpl.coinbasetxn) {
+              return reply(Object.assign({}, tpl, { coinbasetxn: {
+                data: fixtures.withFirstOutputScript(tpl.coinbasetxn.data, state.mineraddressScript) } }));
+            }
+            return reply(tpl);
           }
           case 'submitblock':
             state.submits.push(params[0]);
@@ -76,7 +89,12 @@ async function createMockDaemon(overrides) {
             if (!state.blocks[params[0]]) return reply(null, { code: -5, message: 'Block not found' });
             return reply(state.blocks[params[0]]);
           case 'validateaddress':
-            return reply({ isvalid: state.addressValid, address: params[0] });
+            return reply({ isvalid: state.addressValid, address: params[0],
+              scriptPubKey: state.addressScript !== undefined ? state.addressScript
+                : require('../lib/coinbase').firstOutputScript(state.template.coinbasetxn.data).toString('hex') });
+          case 'decodescript':
+            return reply(Object.assign({ asm: '', type: 'pubkeyhash' },
+              state.scriptAddresses[params[0]] ? { address: state.scriptAddresses[params[0]] } : {}));
           case 'getnetworkinfo':
             if (!state.networkInfo) return reply(null, { code: -1, message: 'getnetworkinfo unavailable' });
             return reply(state.networkInfo);

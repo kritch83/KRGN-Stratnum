@@ -101,7 +101,7 @@ cp config.example.json config.json
 | `pool.kawpow` | Adds a **KawPoW** port (default 3195) for GPUs. See "More algos" below. |
 | `pool.x11` | Adds an **X11** port (default 3197) for ASICs. See "More algos" below. |
 | `pool.<algo>.nodePort` | Optional, in any algo's block: the node RPC port that algo's templates come from — e.g. an `rpcalgoport` you set in kerrigan.conf. Left out, the algo uses `node.port`, which already serves every algo. Each distinct port gets its own RPC connection. |
-| `dashboard.enabled` / `host` / `port` | The web UI. `127.0.0.1` + an SSH tunnel is the safe default; exposing it reveals worker names, your rigs' IPs and your node's public IP (read-only, no payout address). |
+| `dashboard.enabled` / `host` / `port` | The web UI. `127.0.0.1` + an SSH tunnel is the safe default; exposing it reveals worker names, your rigs' IPs, your node's public IP and your payout address (read-only; the address is public on-chain anyway). |
 | `dashboard.historySamples` | Raw chart samples kept, one per 20 s — these drive the **1h** view, so keep it at 180 or more. The 24h and 7d views are kept separately as 5- and 30-minute averages. All are saved to `data/history.json`. 10–5000. |
 | `dashboard.theme` | `default`, `80s-neon`, `80s-sunset` or `80s-miami` — see Themes. Read at startup. |
 | `data.dir` | Where `state.json` (found blocks, counters) and `history.json` (chart) live, plus `*-<algo>.json` for each other algo that is on, and `kawpow/` (KawPoW's epoch caches, ~20 MB each) |
@@ -192,9 +192,21 @@ ssh -L 8080:127.0.0.1:8080 pool-host
 
 - **Top bar** — blocks found across every algo, with the per-algo split. It
   pops once whenever the count has risen since that browser last looked.
-- **Switcher** (two algos only) — one button per algo with its miners,
-  hashrate and port. Tiles, chart, workers and blocks follow the selected algo;
-  the node tiles are shared.
+- **Switcher** (when more than one algo is on) — one button per algo with its
+  miners, hashrate and port. Tiles, chart, workers and blocks follow the
+  selected algo; the node tiles are shared.
+- **Payout strip** — the address every block pays (`pool.address`), and
+  whether the node's own `mineraddress` agrees. stratnum names its address in
+  every template request and the node puts that first, so its blocks pay
+  `pool.address` either way; the dot is about the node's fallback — what it
+  pays when something asks for a template *without* naming an address
+  (another pool program, a manual `getblocktemplate`). Green: it matches.
+  Amber: it differs, or none is set, which would pay a coinbase anyone can
+  spend — set `mineraddress=` to your payout address in kerrigan.conf and
+  restart the node. There is no RPC that reports the setting, so stratnum asks
+  the node for one template without an address at startup and every 10
+  minutes, and reads whom it pays: what the running node actually does, not
+  what the file says. Changes are also logged.
 - **Chart** — network difficulty (left axis) against pool hashrate (right
   axis). Separate scales, so a crossing means nothing; read each against the
   ticks in its own colour. The **1h / 24h / 7d** buttons pick the window (your

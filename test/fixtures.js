@@ -288,6 +288,22 @@ function x11MinerAssemble(notifyParams, en1Hex, en2Hex, nTimeHex, nonceHex, txDa
   return { header, coinbase, block, cbTxid: util.reverseHex(util.sha256d(coinbase).toString('hex')) };
 }
 
+// The coinbase with its first output's script replaced — what the node
+// builds when its payout fallback (-mineraddress) is another address, or
+// OP_TRUE ('51') when it has none. Walked here independently of lib/coinbase.
+function withFirstOutputScript(coinbaseHex, scriptHex) {
+  const buf = Buffer.from(coinbaseHex, 'hex');
+  let off = 4;
+  off += util.readVarint(buf, off).size + 36;            // vin count, outpoint
+  const sl = util.readVarint(buf, off);
+  off += sl.size + sl.value + 4;                          // scriptSig, sequence
+  off += util.readVarint(buf, off).size + 8;              // vout count, value
+  const ol = util.readVarint(buf, off);
+  const script = Buffer.from(scriptHex, 'hex');
+  return Buffer.concat([buf.subarray(0, off), util.varint(script.length), script,
+    buf.subarray(off + ol.size + ol.value)]).toString('hex');
+}
+
 function gbtFromRealBlock(overrides, algo) {
   const a = algo || DEFAULT_ALGO;
   const s = spec(a);
@@ -362,6 +378,6 @@ function realShare(algo) {
 
 module.exports = {
   loadBlockJson, loadRawBlockHex, parseRealBlock, parseHeader, parseHeader80, gbtFromRealBlock, realShare,
-  x11DaemonCoinbase, x11MinerAssemble, daemonHeaderHash,
+  x11DaemonCoinbase, x11MinerAssemble, daemonHeaderHash, withFirstOutputScript,
   SOLUTION_PREFIX, REAL,
 };

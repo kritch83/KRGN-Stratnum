@@ -475,6 +475,15 @@ const tests = [
           [['equihash192', 'Sol/s'], ['equihash200', 'Sol/s'], ['kawpow', 'H/s'], ['x11', 'H/s']]);
         assertEq(snap.blocks.map(b => b.height), [122283]);
         assertEq(snap.pool.stratumPort, portX11);
+        // The payout strip: pool.address, and the node's own fallback agreeing
+        // with it (the check runs at startup; give it a moment).
+        let payout = snap.payout;
+        for (let i = 0; i < 30 && payout.node.status === 'unknown'; i++) {
+          await sleep(100);
+          payout = JSON.parse((await httpGet(dashPort, '/api/stats')).body).payout;
+        }
+        assertEq([payout.address, payout.node.status], ['KTestPayoutAddress1234567890', 'match']);
+        assert(mock.state.gbtRequests.some(g => g.params[0].pooladdress === undefined), 'the probe named no address');
 
         child.kill('SIGTERM');
         const code = await Promise.race([childExit, sleep(4000).then(() => 'timeout')]);

@@ -14,6 +14,7 @@ const algos = require('./lib/algos');
 const { Daemon, externalIpFromConf } = require('./lib/daemon');
 const { createNotifier } = require('./lib/notify');
 const { createAlerts } = require('./lib/alerts');
+const { createPayoutCheck } = require('./lib/payout-check');
 const { StratumServer } = require('./lib/stratum');
 const { ShareProcessor } = require('./lib/shares');
 const { VarDiff } = require('./lib/vardiff');
@@ -388,6 +389,10 @@ async function main() {
   }, 5000);
   if (addrTimer.unref) addrTimer.unref();
 
+  // Whether the node's own -mineraddress agrees with pool.address — shown on
+  // the dashboard, logged when it changes. See lib/payout-check.js.
+  const payoutCheck = createPayoutCheck({ daemon, address: cfg.pool.address, log: logLib.make('payout') });
+
   for (const p of pipelines) {
     try {
       await p.stratum.listen();
@@ -403,7 +408,8 @@ async function main() {
   let dash = null;
   if (cfg.dashboard.enabled) {
     try {
-      dash = createDashboard({ pipelines, daemon, config: cfg, startedAt }, logLib.make('dashboard'));
+      dash = createDashboard({ pipelines, daemon, config: cfg, startedAt, payout: payoutCheck.state },
+        logLib.make('dashboard'));
       await dash.listen();
       log.info(`dashboard at ${browsableUrl(cfg.dashboard.host, cfg.dashboard.port)}`);
     } catch (err) {
@@ -446,6 +452,7 @@ async function main() {
     p.daemon.start();
     p.stats.start(p.daemon, () => util.jobNetDiff(p.stratum.currentJob));
   }
+  payoutCheck.start();
   log.info(`waiting for ${pipelines.map(p => p.algo.key).join(' + ')} templates from ` +
     `${hostPort(cfg.node.host, cfg.node.port)} — point miners at ` +
     pipelines.map(p => `stratum+tcp://<this-host>:${p.port}` + (multi ? ` (${p.algo.short})` : '')).join(', '));
@@ -462,6 +469,7 @@ async function main() {
     shuttingDown = true;
     log.info('shutting down…');
     clearInterval(addrTimer);
+    payoutCheck.stop();
     if (blockSub) blockSub.stop();
     alerts.stop();
     for (const p of pipelines) {
